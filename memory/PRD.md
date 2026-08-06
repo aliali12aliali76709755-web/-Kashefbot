@@ -41,6 +41,16 @@ individuals. All OSINT uses free public sources.
 - Tested: iteration_2 backend 32/33 (the 1 "fail" was a test-spec typo expecting tools=18; real consistent count is 17), frontend 100%.
 
 ## Backlog / Next
+
+### Iteration 3 (2026-08-06) — in-bot admin + growth
+- ✅ In-bot Admin Panel: send `صويري` → password `76891796` → panel (stats, broadcast, upgrade user, forced subscription). is_admin stored on user doc.
+- ✅ Forced subscription gate: admin sets a channel; users must join before use. Fail-open if bot isn't channel admin (never locks users out).
+- ✅ Admin upgrade user: `<id|@user> <pro|elite|free> [days]` grants a plan manually.
+- ✅ Admin broadcast from inside the bot.
+- ✅ Feature Guide (📖) explaining every tool: what it does + how to use (bilingual).
+- ✅ Daily bonus (+10 pts/day) for engagement.
+- Tested: iteration_3 backend 42/42 (100%).
+
 - P1: Google Dorks generator, IBAN/BIN lookup, more CTF challenges, lesson progress tracking.
 - P1: Admin JWT auth instead of static key; broadcast rate-limiting.
 - P2: Payment receipts/history in bot, referral leaderboard rewards, more courses & lessons.
