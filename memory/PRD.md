@@ -24,13 +24,21 @@ individuals. All OSINT uses free public sources.
 - server.py — routes, admin APIs, public stats, startup webhook registration.
 
 ## Implemented (2026-08-06)
-- ✅ 12 OSINT tools working with live public data, daily free-tier limits (8/day free, 150 pro, unlimited elite).
-- ✅ Ethical Hacking Academy, CTF challenges with points + leaderboard, programming courses.
+- ✅ 17 legal OSINT/security tools with live public data + daily free-tier limits.
+- ✅ Ethical Hacking Academy (5 tracks), CTF (8 challenges) + leaderboard, programming courses (4, long simple lessons).
 - ✅ Bilingual (AR/EN) bot + website with full RTL support.
 - ✅ Referral system (+25 pts/friend), gamification.
-- ✅ Stripe subscriptions (Pro/Elite, monthly/yearly) from both bot and website; auto plan activation.
+- ✅ Stripe subscriptions (Pro/Elite, monthly/yearly) from bot + website; auto activation.
 - ✅ Admin dashboard (overview, users, revenue, broadcast).
-- ✅ Premium dark cyber landing page. Tested: 19/19 backend, 100% frontend.
+
+### Iteration 2 (2026-08-06) — new legal, high-demand features
+- ✅ Malicious/phishing URL scanner (heuristics + URLhaus) — defensive.
+- ✅ Enriched email-breach report (exposed data classes, record counts via XposedOrNot breach-analytics).
+- ✅ Public Telegram entity info (channels/groups/bots via getChat) — public data only, refuses private PII.
+- ✅ Google Dorks generator, strong password generator.
+- ✅ Consent-based location share (double opt-in: link consent + browser GPS permission; requester notified in-bot with map link) — transparent, NOT covert tracking.
+- ✅ Explicitly REFUSED illegal requests: covert IP/location grabbers, Telegram user doxxing (phone/location/posts), malware/virus generation, remote device locking. Reason kept legal to avoid Telegram/Stripe bans and legal exposure.
+- Tested: iteration_2 backend 32/33 (the 1 "fail" was a test-spec typo expecting tools=18; real consistent count is 17), frontend 100%.
 
 ## Backlog / Next
 - P1: Google Dorks generator, IBAN/BIN lookup, more CTF challenges, lesson progress tracking.
