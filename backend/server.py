@@ -1,89 +1,157 @@
-from fastapi import FastAPI, APIRouter
-from dotenv import load_dotenv
+from fastapi import FastAPI, APIRouter, Request, HTTPException, Query
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
+from pydantic import BaseModel
 import os
 import logging
-from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List
-import uuid
-from datetime import datetime, timezone
+import asyncio
+
+from core import db, tg, PLANS, ADMIN_KEY, TELEGRAM_WEBHOOK_SECRET, PUBLIC_BASE_URL, effective_plan
+import telegram_bot
+from payments import payments_router
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="Cyber OSINT Suite API")
+api = APIRouter(prefix="/api")
 
 
-ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
-
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
-
-# Create the main app without a prefix
-app = FastAPI()
-
-# Create a router with the /api prefix
-api_router = APIRouter(prefix="/api")
-
-
-# Define Models
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")  # Ignore MongoDB's _id field
-    
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-class StatusCheckCreate(BaseModel):
-    client_name: str
-
-# Add your routes to the router instead of directly to app
-@api_router.get("/")
+@api.get("/")
 async def root():
-    return {"message": "Hello World"}
+    return {"message": "Cyber OSINT Suite API", "status": "online"}
 
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.model_dump()
-    status_obj = StatusCheck(**status_dict)
-    
-    # Convert to dict and serialize datetime to ISO string for MongoDB
-    doc = status_obj.model_dump()
-    doc['timestamp'] = doc['timestamp'].isoformat()
-    
-    _ = await db.status_checks.insert_one(doc)
-    return status_obj
 
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    # Exclude MongoDB's _id field from the query results
-    status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
-    
-    # Convert ISO string timestamps back to datetime objects
-    for check in status_checks:
-        if isinstance(check['timestamp'], str):
-            check['timestamp'] = datetime.fromisoformat(check['timestamp'])
-    
-    return status_checks
+# ---------------- Telegram webhook ----------------
+@api.post("/telegram/webhook/{secret}")
+async def telegram_webhook(secret: str, request: Request):
+    if secret != TELEGRAM_WEBHOOK_SECRET:
+        raise HTTPException(403, "invalid secret")
+    update = await request.json()
+    try:
+        await telegram_bot.handle_update(update)
+    except Exception as ex:
+        logger.exception("update handling failed: %s", ex)
+    return {"ok": True}
 
-# Include the router in the main app
-app.include_router(api_router)
+
+# ---------------- Public data ----------------
+@api.get("/plans")
+async def plans():
+    return {"plans": [{"id": k, **v} for k, v in PLANS.items()]}
+
+
+@api.get("/stats/public")
+async def public_stats():
+    users = await db.users.count_documents({})
+    scans = await db.scans.count_documents({})
+    solved = await db.ctf_submissions.count_documents({"correct": True})
+    tools = len(telegram_bot.TOOLS)
+    return {"users": users, "scans": scans, "solved": solved, "tools": tools,
+            "academy_tracks": 5, "challenges": 6, "courses": 4}
+
+
+# ---------------- Admin ----------------
+class AdminAuth(BaseModel):
+    key: str
+
+
+class Broadcast(BaseModel):
+    key: str
+    message: str
+
+
+def _check_admin(key: str):
+    if key != ADMIN_KEY:
+        raise HTTPException(403, "unauthorized")
+
+
+@api.post("/admin/login")
+async def admin_login(body: AdminAuth):
+    _check_admin(body.key)
+    return {"ok": True}
+
+
+@api.get("/admin/overview")
+async def admin_overview(key: str = Query(...)):
+    _check_admin(key)
+    users = await db.users.count_documents({})
+    paid = await db.payment_transactions.count_documents({"payment_status": "paid"})
+    txs = await db.payment_transactions.find({"payment_status": "paid"}, {"_id": 0, "amount": 1}).to_list(1000)
+    revenue = round(sum(t.get("amount", 0) for t in txs), 2)
+    all_users = await db.users.find({}, {"_id": 0}).to_list(5000)
+    plan_breakdown = {"free": 0, "pro": 0, "elite": 0}
+    for u in all_users:
+        plan_breakdown[effective_plan(u)] = plan_breakdown.get(effective_plan(u), 0) + 1
+    scans = await db.scans.count_documents({})
+    solved = await db.ctf_submissions.count_documents({"correct": True})
+    return {"users": users, "paid_subscriptions": paid, "revenue": revenue,
+            "plan_breakdown": plan_breakdown, "scans": scans, "solved": solved}
+
+
+@api.get("/admin/users")
+async def admin_users(key: str = Query(...)):
+    _check_admin(key)
+    users = await db.users.find({}, {"_id": 0}).sort("created_at", -1).limit(200).to_list(200)
+    for u in users:
+        u["plan"] = effective_plan(u)
+    return {"users": users}
+
+
+@api.get("/admin/transactions")
+async def admin_transactions(key: str = Query(...)):
+    _check_admin(key)
+    txs = await db.payment_transactions.find({}, {"_id": 0}).sort("created_at", -1).limit(100).to_list(100)
+    return {"transactions": txs}
+
+
+@api.post("/admin/broadcast")
+async def admin_broadcast(body: Broadcast):
+    _check_admin(body.key)
+    users = await db.users.find({}, {"_id": 0, "telegram_id": 1}).to_list(10000)
+    sent = 0
+    for u in users:
+        try:
+            res = await tg.send_message(u["telegram_id"], f"📢 {body.message}")
+            if res.get("ok"):
+                sent += 1
+        except Exception:
+            pass
+        await asyncio.sleep(0.05)
+    await db.broadcasts.insert_one({"message": body.message, "sent": sent})
+    return {"sent": sent, "total": len(users)}
+
+
+app.include_router(api)
+app.include_router(payments_router)
 
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+
+@app.on_event("startup")
+async def on_startup():
+    if not tg.enabled:
+        logger.warning("Telegram token not set; bot disabled.")
+        return
+    try:
+        me = await tg.get_me()
+        if me.get("ok"):
+            telegram_bot.BOT_USERNAME = me["result"]["username"]
+            logger.info("Bot: @%s", telegram_bot.BOT_USERNAME)
+        if PUBLIC_BASE_URL:
+            hook = f"{PUBLIC_BASE_URL}/api/telegram/webhook/{TELEGRAM_WEBHOOK_SECRET}"
+            res = await tg.set_webhook(hook)
+            logger.info("setWebhook -> %s (%s)", hook, res)
+    except Exception as ex:
+        logger.warning("startup telegram init failed: %s", ex)
+
 
 @app.on_event("shutdown")
-async def shutdown_db_client():
+async def on_shutdown():
+    from core import client
     client.close()

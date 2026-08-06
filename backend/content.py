@@ -1,0 +1,153 @@
+"""Educational content: Ethical Hacking Academy, CTF challenges, Programming courses.
+All content is bilingual (ar/en) and stored as plain structures rendered by the bot."""
+
+ACADEMY = [
+    {
+        "id": "recon",
+        "title": {"ar": "🛰️ الاستطلاع وجمع المعلومات (OSINT)", "en": "🛰️ Reconnaissance & OSINT"},
+        "lessons": [
+            {"t": {"ar": "ما هو OSINT؟", "en": "What is OSINT?"},
+             "b": {"ar": "الاستخبارات مفتوحة المصدر هي جمع المعلومات المتاحة علنًا (مواقع، سجلات DNS، بيانات مسربة عامة) لتقييم سطح الهجوم. القاعدة الذهبية: اجمع فقط ما هو عام وقانوني.",
+                   "en": "Open-Source Intelligence is collecting publicly available data (websites, DNS records, public breach data) to map an attack surface. Golden rule: only gather what is public and legal."}},
+            {"t": {"ar": "مراحل الاستطلاع", "en": "Recon phases"},
+             "b": {"ar": "1) استطلاع سلبي (بدون لمس الهدف): WHOIS، DNS، محركات البحث.\n2) استطلاع نشط (تفاعل مباشر): فحص المنافذ، تعداد الخدمات.\nابدأ دائمًا بالسلبي لتقليل الأثر.",
+                   "en": "1) Passive (no direct touch): WHOIS, DNS, search engines.\n2) Active (direct interaction): port scanning, service enumeration.\nAlways start passive to reduce footprint."}},
+            {"t": {"ar": "أدوات أساسية", "en": "Core tools"},
+             "b": {"ar": "Google Dorks, theHarvester, Sherlock (أسماء المستخدمين)، Shodan (الأجهزة)، Amass (النطاقات الفرعية). جرّب أدوات هذا البوت لتطبّق عمليًا!",
+                   "en": "Google Dorks, theHarvester, Sherlock (usernames), Shodan (devices), Amass (subdomains). Try this bot's tools to practice!"}},
+        ],
+    },
+    {
+        "id": "web",
+        "title": {"ar": "🌐 أمن تطبيقات الويب (OWASP Top 10)", "en": "🌐 Web App Security (OWASP Top 10)"},
+        "lessons": [
+            {"t": {"ar": "حقن SQL (SQLi)", "en": "SQL Injection (SQLi)"},
+             "b": {"ar": "يحدث عند إدخال بيانات المستخدم في استعلام SQL دون تنقية. الوقاية: استخدم Prepared Statements والـ ORM، ولا تبنِ الاستعلام بالسلاسل النصية.",
+                   "en": "Happens when user input is placed into an SQL query without sanitization. Fix: use prepared statements / ORM, never build queries via string concatenation."}},
+            {"t": {"ar": "XSS (البرمجة عبر المواقع)", "en": "Cross-Site Scripting (XSS)"},
+             "b": {"ar": "حقن سكربت في صفحة يراها مستخدمون آخرون. الوقاية: ترميز المخرجات (output encoding)، سياسة CSP، وتنقية الإدخال.",
+                   "en": "Injecting script that other users execute. Fix: output encoding, CSP policy, and input sanitization."}},
+            {"t": {"ar": "IDOR والتحكم بالوصول", "en": "IDOR & Access Control"},
+             "b": {"ar": "الوصول لموارد غيرك بتغيير معرّف (id=123 → id=124). الوقاية: تحقق من الصلاحية على الخادم لكل طلب.",
+                   "en": "Accessing others' resources by changing an id (id=123 → id=124). Fix: enforce server-side authorization on every request."}},
+        ],
+    },
+    {
+        "id": "network",
+        "title": {"ar": "📡 أساسيات الشبكات والفحص", "en": "📡 Networking & Scanning"},
+        "lessons": [
+            {"t": {"ar": "نموذج TCP/IP", "en": "TCP/IP model"},
+             "b": {"ar": "الطبقات: الوصول للشبكة، الإنترنت (IP)، النقل (TCP/UDP)، التطبيق (HTTP/DNS). فهم الطبقات يساعدك في تحليل الحزم وتشخيص الاختراقات.",
+                   "en": "Layers: link, internet (IP), transport (TCP/UDP), application (HTTP/DNS). Understanding layers helps you analyze packets and diagnose attacks."}},
+            {"t": {"ar": "فحص المنافذ بـ Nmap", "en": "Port scanning with Nmap"},
+             "b": {"ar": "<code>nmap -sV -p- target</code> يكشف الخدمات والإصدارات. افحص فقط الأنظمة التي تملكها أو لديك إذن بها.",
+                   "en": "<code>nmap -sV -p- target</code> reveals services and versions. Only scan systems you own or are authorized to test."}},
+        ],
+    },
+    {
+        "id": "crypto",
+        "title": {"ar": "🔐 التشفير والتجزئة", "en": "🔐 Cryptography & Hashing"},
+        "lessons": [
+            {"t": {"ar": "تشفير متماثل مقابل غير متماثل", "en": "Symmetric vs Asymmetric"},
+             "b": {"ar": "المتماثل (AES) مفتاح واحد سريع. غير المتماثل (RSA/ECC) مفتاح عام وخاص لتبادل آمن. TLS يجمع بينهما.",
+                   "en": "Symmetric (AES) uses one fast key. Asymmetric (RSA/ECC) uses public/private keys for secure exchange. TLS combines both."}},
+            {"t": {"ar": "التجزئة وكلمات المرور", "en": "Hashing & passwords"},
+             "b": {"ar": "خزّن كلمات المرور بـ bcrypt/argon2 مع salt، وليس MD5. جرّب أداة فحص كلمات المرور المسربة في البوت.",
+                   "en": "Store passwords with bcrypt/argon2 + salt, never MD5. Try the bot's pwned-password checker."}},
+        ],
+    },
+    {
+        "id": "linux",
+        "title": {"ar": "🐧 لينكس للهاكر الأخلاقي", "en": "🐧 Linux for Ethical Hackers"},
+        "lessons": [
+            {"t": {"ar": "أوامر أساسية", "en": "Essential commands"},
+             "b": {"ar": "<code>ls, cd, grep, find, chmod, ps, netstat, curl</code>. أتقنها لأنها أساس أي بيئة اختبار اختراق مثل Kali.",
+                   "en": "<code>ls, cd, grep, find, chmod, ps, netstat, curl</code>. Master these — they're the base of any pentest distro like Kali."}},
+            {"t": {"ar": "الصلاحيات والامتيازات", "en": "Permissions & privilege"},
+             "b": {"ar": "فهم rwx وSUID مهم لاكتشاف تصعيد الامتيازات (privilege escalation) في تحديات CTF.",
+                   "en": "Understanding rwx and SUID is key to spotting privilege escalation in CTF challenges."}},
+        ],
+    },
+]
+
+CTF = [
+    {"id": "c1", "points": 50, "cat": {"ar": "تشفير", "en": "Crypto"},
+     "title": {"ar": "قيصر البسيط", "en": "Simple Caesar"},
+     "q": {"ar": "فك تشفير النص (إزاحة 3): <code>FODJ{fdhvdu_lv_hdvb}</code>\nأرسل العلم كاملاً.",
+           "en": "Decrypt (shift 3): <code>FODJ{fdhvdu_lv_hdvb}</code>\nSend the full flag."},
+     "flag": "FLAG{caesar_is_easy}"},
+    {"id": "c2", "points": 60, "cat": {"ar": "ترميز", "en": "Encoding"},
+     "title": {"ar": "مخفي بالـ Base64", "en": "Hidden in Base64"},
+     "q": {"ar": "فك الترميز: <code>RkxBR3tiNjRfZGVjb2RlZH0=</code>", "en": "Decode: <code>RkxBR3tiNjRfZGVjb2RlZH0=</code>"},
+     "flag": "FLAG{b64_decoded}"},
+    {"id": "c3", "points": 80, "cat": {"ar": "ويب", "en": "Web"},
+     "title": {"ar": "روبوتس", "en": "Robots"},
+     "q": {"ar": "أي ملف يخبر محركات البحث بما لا تفهرسه وكثيراً ما يكشف مسارات مخفية؟ الصيغة: FLAG{اسم_الملف}",
+           "en": "Which file tells search engines what not to index and often leaks hidden paths? Format: FLAG{filename}"},
+     "flag": "FLAG{robots.txt}"},
+    {"id": "c4", "points": 70, "cat": {"ar": "تجزئة", "en": "Hashing"},
+     "title": {"ar": "تعرّف عليّ", "en": "Identify me"},
+     "q": {"ar": "ما نوع هذه البصمة؟ <code>5f4dcc3b5aa765d61d8327deb882cf99</code>\nالصيغة: FLAG{النوع}",
+           "en": "What hash type is <code>5f4dcc3b5aa765d61d8327deb882cf99</code>?\nFormat: FLAG{type}"},
+     "flag": "FLAG{md5}"},
+    {"id": "c5", "points": 90, "cat": {"ar": "شبكات", "en": "Networking"},
+     "title": {"ar": "المنفذ الافتراضي", "en": "Default port"},
+     "q": {"ar": "ما المنفذ الافتراضي لـ HTTPS؟ الصيغة: FLAG{الرقم}", "en": "Default HTTPS port? Format: FLAG{number}"},
+     "flag": "FLAG{443}"},
+    {"id": "c6", "points": 100, "cat": {"ar": "OSINT", "en": "OSINT"},
+     "title": {"ar": "من يملك النطاق", "en": "Who owns it"},
+     "q": {"ar": "أي بروتوكول/سجل تستعلم به عن مالك نطاق وتاريخ تسجيله؟ الصيغة: FLAG{الاسم}",
+           "en": "Which record/protocol do you query for a domain's owner and registration date? Format: FLAG{name}"},
+     "flag": "FLAG{whois}"},
+]
+
+COURSES = [
+    {
+        "id": "py",
+        "title": {"ar": "🐍 بايثون من الصفر", "en": "🐍 Python from Zero"},
+        "lessons": [
+            {"t": {"ar": "المتغيرات وأنواع البيانات", "en": "Variables & data types"},
+             "b": {"ar": "<code>name = \"Ali\"\nage = 20\nprice = 9.99</code>\nبايثون تحدد النوع تلقائياً: نص، عدد صحيح، عدد عشري، منطقي.",
+                   "en": "<code>name = \"Ali\"\nage = 20\nprice = 9.99</code>\nPython infers types: str, int, float, bool."}},
+            {"t": {"ar": "الشروط والحلقات", "en": "Conditions & loops"},
+             "b": {"ar": "<code>for i in range(3):\n    if i % 2 == 0:\n        print(i)</code>\nالتحكم في التدفق أساس أي برنامج.",
+                   "en": "<code>for i in range(3):\n    if i % 2 == 0:\n        print(i)</code>\nControl flow is the base of any program."}},
+            {"t": {"ar": "الدوال", "en": "Functions"},
+             "b": {"ar": "<code>def add(a, b):\n    return a + b</code>\nالدوال تنظّم الكود وتعيد استخدامه.",
+                   "en": "<code>def add(a, b):\n    return a + b</code>\nFunctions organize and reuse code."}},
+        ],
+    },
+    {
+        "id": "js",
+        "title": {"ar": "🟨 جافاسكربت للمبتدئين", "en": "🟨 JavaScript Basics"},
+        "lessons": [
+            {"t": {"ar": "المتغيرات", "en": "Variables"},
+             "b": {"ar": "<code>let x = 5;\nconst PI = 3.14;</code>\nاستخدم let و const وتجنّب var.",
+                   "en": "<code>let x = 5;\nconst PI = 3.14;</code>\nPrefer let/const over var."}},
+            {"t": {"ar": "الدوال السهمية", "en": "Arrow functions"},
+             "b": {"ar": "<code>const sum = (a, b) => a + b;</code>\nصيغة مختصرة وشائعة في JS الحديثة.",
+                   "en": "<code>const sum = (a, b) => a + b;</code>\nConcise modern JS syntax."}},
+        ],
+    },
+    {
+        "id": "bash",
+        "title": {"ar": "💻 Bash والأتمتة", "en": "💻 Bash & Automation"},
+        "lessons": [
+            {"t": {"ar": "أول سكربت", "en": "First script"},
+             "b": {"ar": "<code>#!/bin/bash\necho \"Hello\"\nfor f in *.txt; do echo $f; done</code>",
+                   "en": "<code>#!/bin/bash\necho \"Hello\"\nfor f in *.txt; do echo $f; done</code>"}},
+        ],
+    },
+    {
+        "id": "sec",
+        "title": {"ar": "🛡️ مقدمة الأمن السيبراني", "en": "🛡️ Cybersecurity Intro"},
+        "lessons": [
+            {"t": {"ar": "ثالوث CIA", "en": "The CIA triad"},
+             "b": {"ar": "السرية (Confidentiality)، السلامة (Integrity)، التوفّر (Availability). أساس كل ضوابط الأمن.",
+                   "en": "Confidentiality, Integrity, Availability — the foundation of all security controls."}},
+            {"t": {"ar": "أخلاقيات الاختراق", "en": "Hacking ethics"},
+             "b": {"ar": "اختبر فقط بإذن كتابي. الفرق بين القبعة البيضاء والسوداء هو الإذن والنية والقانون.",
+                   "en": "Only test with written authorization. White vs black hat comes down to permission, intent, and law."}},
+        ],
+    },
+]
