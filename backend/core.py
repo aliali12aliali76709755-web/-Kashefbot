@@ -19,6 +19,8 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "admin")
+ADMIN_PASSWORD = os.environ.get("BOT_ADMIN_PASSWORD", "")
+ADMIN_TRIGGER = os.environ.get("BOT_ADMIN_TRIGGER", "")
 
 # Subscription business config
 PLANS = {
@@ -104,6 +106,9 @@ class TelegramClient:
     async def get_chat_member_count(self, chat):
         return await self._call("getChatMemberCount", {"chat_id": chat})
 
+    async def get_chat_member(self, chat, user_id):
+        return await self._call("getChatMember", {"chat_id": chat, "user_id": user_id})
+
     async def get_file_url(self, file_id):
         res = await self._call("getFile", {"file_id": file_id})
         if res.get("ok"):
@@ -112,6 +117,15 @@ class TelegramClient:
 
 
 tg = TelegramClient(TELEGRAM_TOKEN)
+
+
+async def get_config():
+    doc = await db.settings.find_one({"_id": "config"})
+    return doc or {}
+
+
+async def set_config(key, value):
+    await db.settings.update_one({"_id": "config"}, {"$set": {key: value}}, upsert=True)
 
 
 async def get_or_create_user(tg_user: dict, referred_by=None):

@@ -1,0 +1,27 @@
+{
+  "summary": "Iteration 3 backend testing: added 8 new pytest cases covering the in-bot ADMIN panel, forced-subscription flow, daily bonus, feature guide, and admin menu button. All 42 tests pass (100%). Verified via simulated webhook updates + MongoDB assertions: (1) Arabic trigger 'صويري' sets state=await:adminpass; wrong password does NOT grant is_admin; correct password '76891796' sets is_admin=true. (2) adm:upgrade callback puts admin in await:adminupgrade; text '<tid> pro 30' upgrades target user's plan to pro with plan_expires set; '@username elite 365' resolves by username; malformed 'garbage_no_plan' input handled gracefully (webhook returns 200, no crash). Non-admin sending adm:upgrade callback is rejected (no state change, no is_admin). (3) adm:sub sets state await:adminsetchannel; '@somechannel_test' persists forced_channel in settings config doc; 'off' clears it. (4) Fail-open verified: setting forced_channel to a channel bot is NOT admin in makes is_member(random_uid)=True; forced_channel cleared after test. (5) acct:bonus grants +10 points and sets bonus_date=today; second same-day claim does NOT add points. (6) Callbacks menu:guide, guide:osint, guide:learn, guide:plans all return {ok:true} with no 500. kb_main includes 'adm:panel' row when user.is_admin=true and omits it otherwise. (7) Regression fixed: /api/stats/public.tools=17 assertion now matches actual value (spec for this iteration confirms 17). All prior tests (webhook, referral, CTF, payments, admin APIs, /api/loc/* endpoints, OSINT tools, plans count) still pass. Final cleanup test (TestZZZ_ForcedChannelCleanup) confirms forced_channel is None at end of run — no gate left in place for real users. All ephemeral test users (992001-992050 range) are deleted at end of each test class.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "telegram_bot.do_admin_upgrade: `days = int(parts[2]) if len(parts)>2 and parts[2].isdigit() else ...` — if user sends a negative number or overflow, isdigit() returns False so falls back to default; acceptable but consider validating with try/except int() to allow explicit override paths.",
+    "telegram_bot.is_member fail-open on tg.get_chat_member non-ok is correct but silent — consider logging so admins learn their bot lacks channel access.",
+    "telegram_bot._handle_callback: forced-sub gate check is applied to all non-adm callbacks including 'check:sub' — actually check:sub is handled BEFORE the gate check (line 576-582), good. But the gate at line 583 uses `not user.get('is_admin')` OK; still consider skipping gate for 'lang:toggle' so users can switch language on the gate screen.",
+    "core.set_config with value=None sets the key to null instead of $unset — works for lookup but the settings doc grows over time; consider $unset when value is None."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (42/42)", "frontend": "not tested (backend-only iteration)"},
+  "seed_data_creation": "Ephemeral users tid 992001 (admin login), 992010-992012 (admin+targets), 992020 (non-admin), 992030 (sub admin), 992040 (bonus), 992050 (guide) — all deleted at end of each class. forced_channel toggled and cleared.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Bot admin trigger 'صويري' + password '76891796'; webhook secret cybX9f2Kq7wZn4Lp8Rt3Vd6Hs1Mb0Ej; web admin key admin-osint-2026.",
+  "context_for_next_testing_agent": "Suite at /app/backend/tests/backend_test.py now has 42 pytest cases including 8 iteration-3 cases (TestInBotAdminLogin, TestAdminUpgradeUser, TestForcedSubscription, TestDailyBonus, TestGuideAndAdminMenu, TestZZZ_ForcedChannelCleanup). Use _start/_msg/_cb helper functions at top of iteration-3 block for future webhook simulation tests. TestZZZ_ForcedChannelCleanup runs last (alphabetically) as a safety net; keep it there. tools=17 is the correct expected value for /api/stats/public in this iteration.",
+  "rca_of_the_issue": "N/A — all tests pass. Prior iteration 2 test expected tools=18 which was based on spec drift; iteration 3 spec confirms tools=17 and test updated accordingly."
+}

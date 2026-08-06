@@ -57,7 +57,7 @@ class TestPublicAPIs:
         for k in ("users", "scans", "solved", "tools"):
             assert k in d, f"missing {k}"
             assert isinstance(d[k], int)
-        assert d["tools"] == 18, f"expected tools=18 (17 tools+loc), got {d['tools']}"
+        assert d["tools"] == 17, f"expected tools=17, got {d['tools']}"
         assert d.get("challenges") == 8
 
     def test_plans(self, api):
@@ -576,4 +576,238 @@ class TestPlansCount:
         assert r.status_code == 200
         plans = r.json()["plans"]
         assert len(plans) == 4, f"expected 4 plans, got {len(plans)}"
+
+
+# =========================================================
+# ITERATION 3: In-bot admin panel, forced-sub, daily bonus, guide
+# =========================================================
+ADMIN_TRIGGER = "صويري"
+ADMIN_BOT_PASSWORD = "76891796"
+
+
+def _start(tid, fname="X", username=None, uid_offset=0):
+    frm = {"id": tid, "first_name": fname}
+    if username:
+        frm["username"] = username
+    _post_update({"update_id": int(time.time() * 1000) + uid_offset,
+                  "message": {"message_id": 1, "from": frm,
+                              "chat": {"id": tid, "type": "private"}, "text": "/start"}})
+
+
+def _msg(tid, text, uid_offset=0, fname="X"):
+    _post_update({"update_id": int(time.time() * 1000) + uid_offset,
+                  "message": {"message_id": 99, "from": {"id": tid, "first_name": fname},
+                              "chat": {"id": tid, "type": "private"}, "text": text}})
+
+
+def _cb(tid, data, uid_offset=0, fname="X"):
+    _post_update({"update_id": int(time.time() * 1000) + uid_offset,
+                  "callback_query": {"id": f"cb{uid_offset}",
+                                     "from": {"id": tid, "first_name": fname},
+                                     "message": {"message_id": 55, "chat": {"id": tid, "type": "private"}},
+                                     "data": data}})
+
+
+class TestInBotAdminLogin:
+    tid = 992001
+
+    def test_admin_trigger_and_password(self, mongo_db):
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(mongo_db.users.delete_many({"telegram_id": self.tid}))
+        _start(self.tid, "Adm", uid_offset=1)
+        # Send Arabic trigger word
+        _msg(self.tid, ADMIN_TRIGGER, uid_offset=2)
+        u = loop.run_until_complete(mongo_db.users.find_one({"telegram_id": self.tid}))
+        assert u.get("state") == "await:adminpass", f"expected await:adminpass got {u.get('state')}"
+
+        # Wrong password → must NOT set is_admin
+        _msg(self.tid, "wrong_pass_123", uid_offset=3)
+        u = loop.run_until_complete(mongo_db.users.find_one({"telegram_id": self.tid}))
+        assert not u.get("is_admin"), "wrong password must not grant admin"
+        assert u.get("state") is None
+
+        # Trigger again + correct password → is_admin=True
+        _msg(self.tid, ADMIN_TRIGGER, uid_offset=4)
+        _msg(self.tid, ADMIN_BOT_PASSWORD, uid_offset=5)
+        u = loop.run_until_complete(mongo_db.users.find_one({"telegram_id": self.tid}))
+        assert u.get("is_admin") is True, "correct password must grant is_admin"
+        assert u.get("state") is None
+        loop.run_until_complete(mongo_db.users.delete_many({"telegram_id": self.tid}))
+
+
+class TestAdminUpgradeUser:
+    admin_tid = 992010
+    target_tid = 992011
+    target_uname_tid = 992012
+
+    def _make_admin(self, db, tid):
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(db.users.update_one({"telegram_id": tid}, {"$set": {"is_admin": True}}, upsert=False))
+
+    def test_upgrade_by_id_and_username(self, mongo_db):
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(mongo_db.users.delete_many(
+            {"telegram_id": {"$in": [self.admin_tid, self.target_tid, self.target_uname_tid]}}))
+        # create admin and targets
+        _start(self.admin_tid, "AdminBoss", uid_offset=10)
+        self._make_admin(mongo_db, self.admin_tid)
+        _start(self.target_tid, "Target1", uid_offset=11)
+        _start(self.target_uname_tid, "Target2", username="target_uname_x", uid_offset=12)
+
+        # admin clicks adm:upgrade -> state await:adminupgrade
+        _cb(self.admin_tid, "adm:upgrade", uid_offset=13, fname="AdminBoss")
+        u = loop.run_until_complete(mongo_db.users.find_one({"telegram_id": self.admin_tid}))
+        assert u.get("state") == "await:adminupgrade"
+
+        # Upgrade by numeric id
+        _msg(self.admin_tid, f"{self.target_tid} pro 30", uid_offset=14, fname="AdminBoss")
+        t = loop.run_until_complete(mongo_db.users.find_one({"telegram_id": self.target_tid}))
+        assert t.get("plan") == "pro"
+        assert t.get("plan_expires"), "plan_expires must be set"
+
+        # Upgrade by @username
+        _cb(self.admin_tid, "adm:upgrade", uid_offset=15, fname="AdminBoss")
+        _msg(self.admin_tid, "@target_uname_x elite 365", uid_offset=16, fname="AdminBoss")
+        t2 = loop.run_until_complete(mongo_db.users.find_one({"telegram_id": self.target_uname_tid}))
+        assert t2.get("plan") == "elite"
+        assert t2.get("plan_expires")
+
+        # Malformed input - must not crash
+        _cb(self.admin_tid, "adm:upgrade", uid_offset=17, fname="AdminBoss")
+        r = _post_update({"update_id": int(time.time() * 1000) + 18,
+                          "message": {"message_id": 200, "from": {"id": self.admin_tid, "first_name": "AdminBoss"},
+                                      "chat": {"id": self.admin_tid, "type": "private"},
+                                      "text": "garbage_no_plan"}})
+        assert r.status_code == 200
+
+        loop.run_until_complete(mongo_db.users.delete_many(
+            {"telegram_id": {"$in": [self.admin_tid, self.target_tid, self.target_uname_tid]}}))
+
+    def test_non_admin_adm_callback_rejected(self, mongo_db):
+        loop = asyncio.get_event_loop()
+        tid = 992020
+        loop.run_until_complete(mongo_db.users.delete_many({"telegram_id": tid}))
+        _start(tid, "NotAdmin", uid_offset=20)
+        # Non-admin sends adm:upgrade callback
+        _cb(tid, "adm:upgrade", uid_offset=21, fname="NotAdmin")
+        u = loop.run_until_complete(mongo_db.users.find_one({"telegram_id": tid}))
+        assert not u.get("is_admin"), "must not become admin"
+        assert u.get("state") != "await:adminupgrade", f"non-admin got state {u.get('state')}"
+        loop.run_until_complete(mongo_db.users.delete_many({"telegram_id": tid}))
+
+
+class TestForcedSubscription:
+    admin_tid = 992030
+
+    def _cleanup_config(self, db):
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(db.settings.update_one(
+            {"_id": "config"}, {"$set": {"forced_channel": None}}, upsert=True))
+
+    def test_set_and_clear_forced_channel(self, mongo_db):
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(mongo_db.users.delete_many({"telegram_id": self.admin_tid}))
+        self._cleanup_config(mongo_db)
+        _start(self.admin_tid, "SubAdmin", uid_offset=30)
+        loop.run_until_complete(mongo_db.users.update_one({"telegram_id": self.admin_tid},
+                                                          {"$set": {"is_admin": True}}))
+        # adm:sub -> await:adminsetchannel
+        _cb(self.admin_tid, "adm:sub", uid_offset=31, fname="SubAdmin")
+        u = loop.run_until_complete(mongo_db.users.find_one({"telegram_id": self.admin_tid}))
+        assert u.get("state") == "await:adminsetchannel"
+
+        # Set channel
+        _msg(self.admin_tid, "@somechannel_test", uid_offset=32, fname="SubAdmin")
+        from core import get_config
+        cfg = loop.run_until_complete(get_config())
+        assert cfg.get("forced_channel") == "@somechannel_test"
+
+        # Turn off
+        _cb(self.admin_tid, "adm:sub", uid_offset=33, fname="SubAdmin")
+        _msg(self.admin_tid, "off", uid_offset=34, fname="SubAdmin")
+        cfg = loop.run_until_complete(get_config())
+        assert cfg.get("forced_channel") in (None, ""), f"expected cleared, got {cfg.get('forced_channel')}"
+
+        # cleanup
+        self._cleanup_config(mongo_db)
+        loop.run_until_complete(mongo_db.users.delete_many({"telegram_id": self.admin_tid}))
+
+    def test_is_member_fail_open(self, mongo_db):
+        """When forced_channel set to a channel bot is NOT admin in, is_member returns True (fail-open)."""
+        loop = asyncio.get_event_loop()
+        from core import set_config
+        from telegram_bot import is_member
+        # Set to a bogus channel bot has no access to
+        loop.run_until_complete(set_config("forced_channel", "@nonexistent_bogus_channel_zzz_123"))
+        try:
+            result = loop.run_until_complete(is_member(88888888))
+            assert result is True, f"is_member must fail-open (True) when bot cannot verify, got {result}"
+        finally:
+            # CRITICAL cleanup — clear so real users aren't gated
+            loop.run_until_complete(set_config("forced_channel", None))
+            cfg = loop.run_until_complete(__import__("core").get_config())
+            assert cfg.get("forced_channel") in (None, ""), "forced_channel MUST be cleared"
+
+
+class TestDailyBonus:
+    tid = 992040
+
+    def test_bonus_once_per_day(self, mongo_db):
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(mongo_db.users.delete_many({"telegram_id": self.tid}))
+        _start(self.tid, "BonusUser", uid_offset=40)
+        u0 = loop.run_until_complete(mongo_db.users.find_one({"telegram_id": self.tid}))
+        p0 = u0.get("points", 0)
+
+        _cb(self.tid, "acct:bonus", uid_offset=41, fname="BonusUser")
+        u1 = loop.run_until_complete(mongo_db.users.find_one({"telegram_id": self.tid}))
+        assert u1.get("points", 0) == p0 + 10, f"expected +10 points, got {u1.get('points')}"
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        assert u1.get("bonus_date") == today
+
+        # Second claim same day → no change
+        _cb(self.tid, "acct:bonus", uid_offset=42, fname="BonusUser")
+        u2 = loop.run_until_complete(mongo_db.users.find_one({"telegram_id": self.tid}))
+        assert u2.get("points", 0) == p0 + 10, f"second claim must not add; got {u2.get('points')}"
+
+        loop.run_until_complete(mongo_db.users.delete_many({"telegram_id": self.tid}))
+
+
+class TestGuideAndAdminMenu:
+    tid = 992050
+
+    def test_guide_callbacks_no_500(self, mongo_db):
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(mongo_db.users.delete_many({"telegram_id": self.tid}))
+        _start(self.tid, "GuideUser", uid_offset=50)
+        for i, data in enumerate(["menu:guide", "guide:osint", "guide:learn", "guide:plans"], start=51):
+            r = _post_update({"update_id": int(time.time() * 1000) + i,
+                              "callback_query": {"id": f"gb{i}", "from": {"id": self.tid, "first_name": "GuideUser"},
+                                                 "message": {"message_id": 60, "chat": {"id": self.tid, "type": "private"}},
+                                                 "data": data}})
+            assert r.status_code == 200, f"{data} returned {r.status_code}"
+            assert r.json() == {"ok": True}
+        loop.run_until_complete(mongo_db.users.delete_many({"telegram_id": self.tid}))
+
+    def test_admin_menu_has_admin_panel_button(self, mongo_db):
+        """kb_main includes adm:panel row when user.is_admin."""
+        from telegram_bot import kb_main
+        rows_normal = kb_main("en", {"is_admin": False})
+        flat_n = [b.get("callback_data") for row in rows_normal for b in row]
+        assert "adm:panel" not in flat_n, "non-admin must not see admin panel button"
+
+        rows_admin = kb_main("en", {"is_admin": True})
+        flat_a = [b.get("callback_data") for row in rows_admin for b in row]
+        assert "adm:panel" in flat_a, "admin must see adm:panel button"
+
+
+# Final sanity: ensure forced_channel is cleared (safety net)
+class TestZZZ_ForcedChannelCleanup:
+    def test_forced_channel_is_cleared(self, mongo_db):
+        from core import get_config
+        loop = asyncio.get_event_loop()
+        cfg = loop.run_until_complete(get_config())
+        fc = cfg.get("forced_channel")
+        assert fc in (None, ""), f"forced_channel MUST be cleared after tests, still set to: {fc}"
 

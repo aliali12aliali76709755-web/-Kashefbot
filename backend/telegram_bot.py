@@ -6,6 +6,7 @@ import secrets
 from core import (
     db, tg, PLANS, LIMITS, effective_plan, get_or_create_user,
     set_state, set_lang, check_and_increment, now_utc, PUBLIC_BASE_URL,
+    ADMIN_PASSWORD, ADMIN_TRIGGER, get_config, set_config,
 )
 import osint
 import content
@@ -84,8 +85,8 @@ TOOLS = {
 
 
 # ---------- keyboards ----------
-def kb_main(lang):
-    return [
+def kb_main(lang, user=None):
+    rows = [
         [{"text": T(lang, "🛰️ أدوات OSINT", "🛰️ OSINT Tools"), "callback_data": "menu:osint"}],
         [{"text": T(lang, "🎓 أكاديمية الاختراق الأخلاقي", "🎓 Ethical Hacking Academy"), "callback_data": "menu:academy"}],
         [{"text": T(lang, "🚩 تحديات CTF", "🚩 CTF Challenges"), "callback_data": "menu:ctf"},
@@ -93,8 +94,12 @@ def kb_main(lang):
         [{"text": T(lang, "💻 تعلّم البرمجة", "💻 Learn to Code"), "callback_data": "menu:courses"}],
         [{"text": T(lang, "👤 حسابي", "👤 My Account"), "callback_data": "menu:account"},
          {"text": T(lang, "💎 ترقية", "💎 Upgrade"), "callback_data": "menu:upgrade"}],
+        [{"text": T(lang, "📖 شرح الميزات", "📖 Feature Guide"), "callback_data": "menu:guide"}],
         [{"text": T(lang, "🌐 English", "🌐 العربية"), "callback_data": "lang:toggle"}],
     ]
+    if user and user.get("is_admin"):
+        rows.insert(-1, [{"text": T(lang, "🛠️ لوحة تحكم الأدمن", "🛠️ Admin Panel"), "callback_data": "adm:panel"}])
+    return rows
 
 
 def kb_osint(lang):
@@ -237,6 +242,198 @@ def upgrade_text(lang):
     )
 
 
+def kb_account(lang):
+    return [
+        [{"text": T(lang, "🎁 مكافأة يومية (+10)", "🎁 Daily bonus (+10)"), "callback_data": "acct:bonus"}],
+        [{"text": T(lang, "💎 ترقية باقتي", "💎 Upgrade plan"), "callback_data": "menu:upgrade"}],
+        [{"text": T(lang, "⬅️ رجوع", "⬅️ Back"), "callback_data": "menu:main"}],
+    ]
+
+
+# ---------- forced subscription gate ----------
+async def is_member(chat_id) -> bool:
+    cfg = await get_config()
+    ch = cfg.get("forced_channel")
+    if not ch:
+        return True
+    u = await db.users.find_one({"telegram_id": chat_id})
+    if u and u.get("is_admin"):
+        return True
+    res = await tg.get_chat_member(ch, chat_id)
+    if res.get("ok"):
+        return res["result"]["status"] not in ("left", "kicked")
+    return True  # fail-open if bot can't verify (not admin in channel)
+
+
+async def send_join(chat_id, lang):
+    cfg = await get_config()
+    ch = (cfg.get("forced_channel") or "").lstrip("@")
+    link = f"https://t.me/{ch}"
+    text = T(lang,
+             f"🔒 <b>الاشتراك مطلوب</b>\n\nللاستمرار، اشترك أولاً بالقناة:\n👉 @{esc(ch)}\n\nبعد الاشتراك اضغط «✅ تحقّقت».",
+             f"🔒 <b>Subscription required</b>\n\nTo continue, join our channel first:\n👉 @{esc(ch)}\n\nAfter joining, tap “✅ I've joined”.")
+    kb = [[{"text": T(lang, "📢 اشترك بالقناة", "📢 Join channel"), "url": link}],
+          [{"text": T(lang, "✅ تحقّقت", "✅ I've joined"), "callback_data": "check:sub"}]]
+    await tg.send_message(chat_id, text, kb)
+
+
+# ---------- feature guide ----------
+def kb_guide(lang):
+    return [
+        [{"text": T(lang, "🛰️ شرح أدوات OSINT", "🛰️ OSINT tools guide"), "callback_data": "guide:osint"}],
+        [{"text": T(lang, "🎓 شرح التعلّم و CTF", "🎓 Learning & CTF guide"), "callback_data": "guide:learn"}],
+        [{"text": T(lang, "💎 الاشتراكات والنقاط", "💎 Plans & points"), "callback_data": "guide:plans"}],
+        [{"text": T(lang, "⬅️ رجوع", "⬅️ Back"), "callback_data": "menu:main"}],
+    ]
+
+
+def guide_text(lang, sec):
+    if sec == "osint":
+        if lang == "ar":
+            return (
+                "🛰️ <b>دليل أدوات OSINT — ماذا تفعل وكيف تستخدمها</b>\n\n"
+                "🌐 <b>معلومات IP</b>: تعرف الدولة والمدينة ومزود الخدمة لأي عنوان IP. الاستخدام: اضغط الأداة وأرسل IP مثل <code>8.8.8.8</code>.\n\n"
+                "📞 <b>تحليل رقم</b>: يكشف الدولة والشركة ونوع الخط والتوقيت. أرسل الرقم مع رمز الدولة <code>+9647...</code>. (اسم صاحب الرقم غير متاح قانونياً).\n\n"
+                "🔎 <b>WHOIS نطاق</b>: مالك النطاق وتاريخ تسجيله وانتهائه. أرسل <code>example.com</code>.\n\n"
+                "🧭 <b>سجلات DNS</b>: عناوين الخوادم وسجلات البريد. أرسل النطاق.\n\n"
+                "📧 <b>فحص تسريب بريد</b>: هل ظهر بريدك في تسريبات؟ وما البيانات المكشوفة. أرسل الإيميل. (للدفاع: افحص بريدك أنت).\n\n"
+                "🔑 <b>كلمة مرور مسرّبة</b>: كم مرة ظهرت كلمتك في التسريبات. لا نخزّنها إطلاقاً.\n\n"
+                "🕵️ <b>بحث اسم مستخدم</b>: يبحث عن اليوزر عبر 12 منصة. أرسل اسم المستخدم.\n\n"
+                "🛡️ <b>فاحص روابط خبيثة</b>: يكشف روابط التصيّد والاحتيال قبل ما تفتحها. أرسل الرابط.\n\n"
+                "🔗 <b>تحليل رابط</b>: حالة الموقع، الخادم، رؤوس الأمان. أرسل الرابط.\n\n"
+                "🔎 <b>معلومات كيان تليجرام</b>: معلومات قناة/بوت/مجموعة عامة. أرسل اليوزر العام <code>@telegram</code>.\n\n"
+                "🧰 <b>Google Dorks</b>: يولّد استعلامات بحث متقدمة لأي نطاق. أرسل النطاق.\n\n"
+                "📍 <b>مشاركة موقع بموافقة</b>: يعطيك رابطاً ترسله لشخص، وإذا وافق يصلك موقعه. شفّاف وقانوني.\n\n"
+                "🔐 <b>Hash / Base64 / مولّد كلمة مرور</b>: أدوات تشفير وترميز وتوليد كلمات مرور قوية."
+            )
+        return (
+            "🛰️ <b>OSINT Tools Guide — what each does & how to use</b>\n\n"
+            "🌐 <b>IP Lookup</b>: country, city, ISP of any IP. Tap it and send an IP like <code>8.8.8.8</code>.\n\n"
+            "📞 <b>Phone Analysis</b>: country, carrier, line type, timezone. Send with country code <code>+1...</code>. (Owner name is not legally available).\n\n"
+            "🔎 <b>Domain WHOIS</b>: owner, registration & expiry dates. Send <code>example.com</code>.\n\n"
+            "🧭 <b>DNS Records</b>: server addresses and mail records. Send a domain.\n\n"
+            "📧 <b>Email Breach</b>: was your email leaked, and what data was exposed. Send an email (defensive: check your own).\n\n"
+            "🔑 <b>Pwned Password</b>: how many times your password appeared in breaches. Never stored.\n\n"
+            "🕵️ <b>Username Search</b>: searches a username across 12 platforms.\n\n"
+            "🛡️ <b>Malicious URL</b>: detects phishing/scam links before you open them.\n\n"
+            "🔗 <b>URL Analysis</b>: site status, server, security headers.\n\n"
+            "🔎 <b>Telegram Entity</b>: info about a public channel/bot/group. Send <code>@telegram</code>.\n\n"
+            "🧰 <b>Google Dorks</b>: generates advanced search queries for a domain.\n\n"
+            "📍 <b>Consent Location</b>: gives you a link to send someone; if they agree, you receive their location.\n\n"
+            "🔐 <b>Hash / Base64 / Password Gen</b>: encoding & strong-password utilities."
+        )
+    if sec == "learn":
+        return T(lang,
+            "🎓 <b>دليل التعلّم و CTF</b>\n\n"
+            "🎓 <b>الأكاديمية</b>: 5 مسارات (استطلاع، ويب، شبكات، تشفير، لينكس). اضغط المسار لقراءة دروسه الطويلة المبسّطة.\n\n"
+            "💻 <b>تعلّم البرمجة</b>: دورات بايثون (من الصفر للاحتراف)، جافاسكربت، Bash، وأمن سيبراني.\n\n"
+            "🚩 <b>تحديات CTF</b>: حل اللغز ثم اضغط «إرسال العلم» وأرسل الإجابة بصيغة <code>FLAG{...}</code> لتكسب النقاط.\n\n"
+            "🏆 <b>المتصدّرون</b>: ترتيب أعلى اللاعبين نقاطاً. النقاط تجيك من حل التحديات والإحالات والمكافأة اليومية.",
+            "🎓 <b>Learning & CTF Guide</b>\n\n"
+            "🎓 <b>Academy</b>: 5 tracks (recon, web, networking, crypto, Linux). Tap a track to read its long, simple lessons.\n\n"
+            "💻 <b>Learn to Code</b>: Python (zero to pro), JavaScript, Bash, and cybersecurity courses.\n\n"
+            "🚩 <b>CTF</b>: solve the puzzle, tap 'Submit flag', and send the answer as <code>FLAG{...}</code> to earn points.\n\n"
+            "🏆 <b>Leaderboard</b>: top players by points. Earn points from challenges, referrals, and the daily bonus.")
+    return T(lang,
+        "💎 <b>الاشتراكات والنقاط</b>\n\n"
+        "<b>الباقات</b>: FREE (8 عمليات/يوم)، PRO (150/يوم + كل الدروس)، ELITE (غير محدود).\n"
+        "للاشتراك: القائمة ← 💎 ترقية ← اختر الباقة ← ادفع بأمان عبر Stripe. تُفعَّل باقتك تلقائياً.\n\n"
+        "<b>النقاط</b> 🏅: تكسبها من حل تحديات CTF (50-120 نقطة)، ومن دعوة الأصدقاء (25 نقطة/صديق)، ومن المكافأة اليومية (10 نقاط).\n\n"
+        "<b>الإحالة</b>: افتح «حسابي» وانسخ رابط الإحالة الخاص بك وشاركه.",
+        "💎 <b>Plans & Points</b>\n\n"
+        "<b>Plans</b>: FREE (8 scans/day), PRO (150/day + all lessons), ELITE (unlimited).\n"
+        "To subscribe: Menu → 💎 Upgrade → pick a plan → pay via Stripe. Your plan activates automatically.\n\n"
+        "<b>Points</b> 🏅: earn from CTF challenges (50-120 pts), inviting friends (25 pts each), and the daily bonus (10 pts).\n\n"
+        "<b>Referral</b>: open 'My Account' and share your referral link.")
+
+
+# ---------- admin panel ----------
+def kb_admin(lang):
+    return [
+        [{"text": T(lang, "📊 الإحصائيات", "📊 Statistics"), "callback_data": "adm:stats"}],
+        [{"text": T(lang, "📢 بثّ رسالة للجميع", "📢 Broadcast"), "callback_data": "adm:broadcast"}],
+        [{"text": T(lang, "⬆️ ترقية مستخدم", "⬆️ Upgrade a user"), "callback_data": "adm:upgrade"}],
+        [{"text": T(lang, "🔒 الاشتراك الإجباري", "🔒 Forced subscription"), "callback_data": "adm:sub"}],
+        [{"text": T(lang, "⬅️ رجوع", "⬅️ Back"), "callback_data": "menu:main"}],
+    ]
+
+
+async def admin_panel(edit, lang):
+    txt = T(lang,
+            "🛠️ <b>لوحة تحكم الأدمن</b>\n\nاختر إجراءً:\n"
+            "• 📊 الإحصائيات: أرقام المستخدمين والاشتراكات والإيرادات.\n"
+            "• 📢 البثّ: أرسل رسالة لكل المستخدمين دفعة واحدة.\n"
+            "• ⬆️ ترقية مستخدم: فعّل باقة لأي مستخدم يدوياً.\n"
+            "• 🔒 الاشتراك الإجباري: أجبر المستخدمين على الاشتراك بقناتك.",
+            "🛠️ <b>Admin Panel</b>\n\nPick an action:\n"
+            "• 📊 Statistics: users, subscriptions, revenue.\n"
+            "• 📢 Broadcast: message all users at once.\n"
+            "• ⬆️ Upgrade a user: manually grant a plan.\n"
+            "• 🔒 Forced subscription: require users to join your channel.")
+    await edit(txt, kb_admin(lang))
+
+
+async def admin_stats_text(lang):
+    users = await db.users.count_documents({})
+    paid = await db.payment_transactions.count_documents({"payment_status": "paid"})
+    txs = await db.payment_transactions.find({"payment_status": "paid"}, {"_id": 0, "amount": 1}).to_list(2000)
+    revenue = round(sum(t.get("amount", 0) for t in txs), 2)
+    scans = await db.scans.count_documents({})
+    solved = await db.ctf_submissions.count_documents({"correct": True})
+    all_u = await db.users.find({}, {"_id": 0}).to_list(5000)
+    pro = sum(1 for u in all_u if effective_plan(u) == "pro")
+    elite = sum(1 for u in all_u if effective_plan(u) == "elite")
+    cfg = await get_config()
+    ch = cfg.get("forced_channel") or T(lang, "غير مفعّل", "off")
+    return T(lang,
+        f"📊 <b>الإحصائيات</b>\n\n👥 المستخدمون: <b>{users}</b>\n💎 اشتراكات مدفوعة: <b>{paid}</b> (PRO {pro} · ELITE {elite})\n💰 الإيرادات: <b>${revenue}</b>\n🔍 عمليات الفحص: <b>{scans}</b>\n🚩 تحديات محلولة: <b>{solved}</b>\n🔒 قناة الاشتراك الإجباري: {esc(ch)}",
+        f"📊 <b>Statistics</b>\n\n👥 Users: <b>{users}</b>\n💎 Paid subs: <b>{paid}</b> (PRO {pro} · ELITE {elite})\n💰 Revenue: <b>${revenue}</b>\n🔍 Scans: <b>{scans}</b>\n🚩 Solved: <b>{solved}</b>\n🔒 Forced channel: {esc(ch)}")
+
+
+async def do_admin_broadcast(chat_id, lang, message):
+    users = await db.users.find({}, {"_id": 0, "telegram_id": 1}).to_list(20000)
+    sent = 0
+    for u in users:
+        try:
+            res = await tg.send_message(u["telegram_id"], f"📢 {message}")
+            if res.get("ok"):
+                sent += 1
+        except Exception:
+            pass
+    await db.broadcasts.insert_one({"message": message, "sent": sent, "at": now_utc().isoformat()})
+    await tg.send_message(chat_id, T(lang, f"✅ تم إرسال البثّ إلى {sent} مستخدم.", f"✅ Broadcast sent to {sent} users."), kb_admin(lang))
+
+
+async def do_admin_upgrade(chat_id, lang, text):
+    parts = text.split()
+    if len(parts) < 2 or parts[1].lower() not in ("pro", "elite", "free"):
+        await tg.send_message(chat_id, T(lang,
+            "❌ صيغة خاطئة. اكتب: <code>المعرّف الباقة [الأيام]</code>\nمثال: <code>123456789 pro 30</code> أو <code>@username elite 365</code>",
+            "❌ Wrong format. Use: <code>id plan [days]</code>\ne.g. <code>123456789 pro 30</code> or <code>@username elite 365</code>"), kb_admin(lang))
+        return
+    target, plan = parts[0], parts[1].lower()
+    days = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else (365 if plan == "elite" else 30)
+    if target.startswith("@"):
+        u = await db.users.find_one({"username": target.lstrip("@")})
+        tid = u["telegram_id"] if u else None
+    else:
+        tid = int(target) if target.lstrip("-").isdigit() else None
+    if not tid:
+        await tg.send_message(chat_id, T(lang, "❌ لم أجد هذا المستخدم (لازم يكون بدأ البوت).", "❌ User not found (they must have started the bot)."), kb_admin(lang))
+        return
+    if plan == "free":
+        await db.users.update_one({"telegram_id": tid}, {"$set": {"plan": "free", "plan_expires": None}})
+    else:
+        from datetime import timedelta
+        exp = (now_utc() + timedelta(days=days)).isoformat()
+        await db.users.update_one({"telegram_id": tid}, {"$set": {"plan": plan, "plan_expires": exp}})
+        try:
+            await tg.send_message(tid, T(lang, f"🎉 تمت ترقيتك إلى <b>{plan.upper()}</b> لمدة {days} يوم!", f"🎉 You were upgraded to <b>{plan.upper()}</b> for {days} days!"))
+        except Exception:
+            pass
+    await tg.send_message(chat_id, T(lang, f"✅ تم ضبط باقة المستخدم {tid} إلى {plan.upper()}.", f"✅ User {tid} set to {plan.upper()}."), kb_admin(lang))
+
+
 # ---------- update handling ----------
 async def handle_update(update: dict):
     if "callback_query" in update:
@@ -259,36 +456,76 @@ async def _handle_message(msg):
             referred_by = int(parts[1].strip())
     user = await get_or_create_user(tg_user, referred_by)
     lang = user.get("lang", "ar")
+    state = user.get("state") or ""
+
+    # ---- admin login trigger ----
+    if ADMIN_TRIGGER and text.strip() == ADMIN_TRIGGER:
+        await set_state(chat_id, "await:adminpass")
+        await tg.send_message(chat_id, T(lang, "🔐 أدخل كلمة سر لوحة التحكم:", "🔐 Enter the admin password:"))
+        return
+    if state == "await:adminpass":
+        await set_state(chat_id, None)
+        if ADMIN_PASSWORD and text.strip() == ADMIN_PASSWORD:
+            await db.users.update_one({"telegram_id": chat_id}, {"$set": {"is_admin": True}})
+            await tg.send_message(chat_id, T(lang, "✅ أهلاً أيها الأدمن! هذه لوحة التحكم:", "✅ Welcome, admin! Here is your panel:"), kb_admin(lang))
+        else:
+            await tg.send_message(chat_id, T(lang, "❌ كلمة سر خاطئة. لا يمكنك الدخول.", "❌ Wrong password. Access denied."))
+        return
+    if state == "await:adminbroadcast" and user.get("is_admin"):
+        await set_state(chat_id, None)
+        await do_admin_broadcast(chat_id, lang, text)
+        return
+    if state == "await:adminupgrade" and user.get("is_admin"):
+        await set_state(chat_id, None)
+        await do_admin_upgrade(chat_id, lang, text)
+        return
+    if state == "await:adminsetchannel" and user.get("is_admin"):
+        await set_state(chat_id, None)
+        ch = text.strip()
+        if ch.lower() in ("off", "الغاء", "إلغاء", "-"):
+            await set_config("forced_channel", None)
+            await tg.send_message(chat_id, T(lang, "✅ تم إيقاف الاشتراك الإجباري.", "✅ Forced subscription disabled."), kb_admin(lang))
+        else:
+            ch = "@" + ch.lstrip("@")
+            await set_config("forced_channel", ch)
+            await tg.send_message(chat_id, T(lang,
+                f"✅ تم تفعيل الاشتراك الإجباري على {ch}.\n⚠️ تأكد أن البوت أدمن في القناة حتى يتحقق من الاشتراك.",
+                f"✅ Forced subscription set to {ch}.\n⚠️ Make sure the bot is an admin in that channel so it can verify membership."), kb_admin(lang))
+        return
+
+    # ---- forced subscription gate (non-admin) ----
+    if not text.startswith("/start") and not await is_member(chat_id):
+        await send_join(chat_id, lang)
+        return
 
     if text.startswith("/start") or text.startswith("/menu"):
         await set_state(chat_id, None)
-        await tg.send_message(chat_id, main_text(lang, user), kb_main(lang))
+        if not await is_member(chat_id):
+            await send_join(chat_id, lang)
+            return
+        await tg.send_message(chat_id, main_text(lang, user), kb_main(lang, user))
         return
     if text.startswith("/help"):
         await tg.send_message(chat_id, T(lang,
             "الأوامر:\n/start القائمة\n/menu القائمة\n/me حسابي\n/lang تغيير اللغة",
-            "Commands:\n/start menu\n/menu menu\n/me account\n/lang change language"), kb_main(lang))
+            "Commands:\n/start menu\n/menu menu\n/me account\n/lang change language"), kb_main(lang, user))
         return
     if text.startswith("/me"):
-        await tg.send_message(chat_id, await account_text(lang, chat_id), kb_back(lang))
+        await tg.send_message(chat_id, await account_text(lang, chat_id), kb_account(lang))
         return
     if text.startswith("/lang"):
         new = "en" if lang == "ar" else "ar"
         await set_lang(chat_id, new)
         u = await db.users.find_one({"telegram_id": chat_id})
-        await tg.send_message(chat_id, main_text(new, u), kb_main(new))
+        await tg.send_message(chat_id, main_text(new, u), kb_main(new, u))
         return
 
     # stateful input
-    state = user.get("state") or ""
     if state.startswith("await:"):
         key = state.split(":", 1)[1]
         await set_state(chat_id, None)
         await _run_tool(chat_id, lang, key, text)
         return
-    if state == "await:ctfflag":
-        return
-
     if state.startswith("ctfflag:"):
         cid = state.split(":", 1)[1]
         await set_state(chat_id, None)
@@ -296,7 +533,7 @@ async def _handle_message(msg):
         return
 
     # default
-    await tg.send_message(chat_id, T(lang, "استخدم /menu لفتح القائمة 👇", "Use /menu to open the menu 👇"), kb_main(lang))
+    await tg.send_message(chat_id, T(lang, "استخدم /menu لفتح القائمة 👇", "Use /menu to open the menu 👇"), kb_main(lang, user))
 
 
 async def _run_tool(chat_id, lang, key, text):
@@ -336,14 +573,25 @@ async def _handle_callback(cq):
     async def edit(text, kb):
         await tg.edit_message(chat_id, message_id, text, kb)
 
+    if data == "check:sub":
+        if await is_member(chat_id):
+            await set_state(chat_id, None)
+            await edit(main_text(lang, user), kb_main(lang, user))
+        else:
+            await send_join(chat_id, lang)
+        return
+    if not data.startswith("adm:") and not user.get("is_admin") and not await is_member(chat_id):
+        await send_join(chat_id, lang)
+        return
+
     if data == "menu:main":
         await set_state(chat_id, None)
-        await edit(main_text(lang, user), kb_main(lang))
+        await edit(main_text(lang, user), kb_main(lang, user))
     elif data == "lang:toggle":
         new = "en" if lang == "ar" else "ar"
         await set_lang(chat_id, new)
         u = await db.users.find_one({"telegram_id": chat_id})
-        await edit(main_text(new, u), kb_main(new))
+        await edit(main_text(new, u), kb_main(new, u))
     elif data == "menu:osint":
         await edit(osint_text(lang), kb_osint(lang))
     elif data == "menu:academy":
@@ -353,9 +601,43 @@ async def _handle_callback(cq):
     elif data == "menu:ctf":
         await edit(T(lang, "🚩 <b>تحديات CTF</b>\nحل التحدي وأرسل العلم لتكسب النقاط:", "🚩 <b>CTF Challenges</b>\nSolve and submit the flag to earn points:"), kb_ctf(lang))
     elif data == "menu:account":
-        await edit(await account_text(lang, chat_id), kb_back(lang))
+        await edit(await account_text(lang, chat_id), kb_account(lang))
     elif data == "menu:upgrade":
         await edit(upgrade_text(lang), kb_upgrade(lang))
+    elif data == "menu:guide":
+        await edit(T(lang, "📖 <b>دليل الميزات</b>\nاختر قسماً لتعرف كل ميزة وكيف تستخدمها:", "📖 <b>Feature Guide</b>\nPick a section to learn each feature and how to use it:"), kb_guide(lang))
+    elif data.startswith("guide:"):
+        sec = data.split(":", 1)[1]
+        await edit(guide_text(lang, sec), kb_back(lang, "menu:guide"))
+    elif data == "acct:bonus":
+        await _daily_bonus(chat_id, lang, edit)
+    elif data == "adm:panel":
+        if user.get("is_admin"):
+            await admin_panel(edit, lang)
+        else:
+            await tg.answer_callback(cq["id"], T(lang, "غير مصرّح", "Not authorized"))
+    elif data.startswith("adm:"):
+        if not user.get("is_admin"):
+            await tg.answer_callback(cq["id"], T(lang, "غير مصرّح", "Not authorized"))
+            return
+        action = data.split(":", 1)[1]
+        if action == "stats":
+            await edit(await admin_stats_text(lang), kb_admin(lang))
+        elif action == "broadcast":
+            await set_state(chat_id, "await:adminbroadcast")
+            await edit(T(lang, "📢 أرسل نص الرسالة التي تريد بثّها لكل المستخدمين:", "📢 Send the message text to broadcast to all users:"), kb_admin(lang))
+        elif action == "upgrade":
+            await set_state(chat_id, "await:adminupgrade")
+            await edit(T(lang,
+                "⬆️ أرسل: <code>المعرّف الباقة [الأيام]</code>\nمثال: <code>123456789 pro 30</code>\nأو بيوزر: <code>@username elite 365</code>",
+                "⬆️ Send: <code>id plan [days]</code>\ne.g. <code>123456789 pro 30</code>\nor by username: <code>@username elite 365</code>"), kb_admin(lang))
+        elif action == "sub":
+            cfg = await get_config()
+            cur = cfg.get("forced_channel") or T(lang, "غير مفعّل", "off")
+            await set_state(chat_id, "await:adminsetchannel")
+            await edit(T(lang,
+                f"🔒 <b>الاشتراك الإجباري</b>\nالحالي: {esc(cur)}\n\nأرسل يوزر القناة (مثال: <code>@mychannel</code>) لتفعيله، أو أرسل <code>off</code> للإلغاء.\n⚠️ لازم يكون البوت أدمن في القناة.",
+                f"🔒 <b>Forced subscription</b>\nCurrent: {esc(cur)}\n\nSend the channel @username (e.g. <code>@mychannel</code>) to enable, or send <code>off</code> to disable.\n⚠️ The bot must be admin in that channel."), kb_admin(lang))
     elif data == "tool:loc":
         await _start_loc(chat_id, lang, edit)
     elif data.startswith("tool:"):
@@ -461,6 +743,18 @@ async def _leaderboard_text(lang):
     if len(lines) <= 2:
         lines.append(T(lang, "لا يوجد نقاط بعد. كن الأول! 🚀", "No points yet. Be the first! 🚀"))
     return "\n".join(lines)
+
+
+async def _daily_bonus(chat_id, lang, edit):
+    today = now_utc().strftime("%Y-%m-%d")
+    u = await db.users.find_one({"telegram_id": chat_id})
+    if u.get("bonus_date") == today:
+        msg = T(lang, "⏳ أخذت مكافأتك اليوم. عُد غداً!", "⏳ Already claimed today. Come back tomorrow!")
+    else:
+        await db.users.update_one({"telegram_id": chat_id}, {"$inc": {"points": 10}, "$set": {"bonus_date": today}})
+        msg = T(lang, "🎁 حصلت على 10 نقاط!", "🎁 You earned 10 points!")
+    text = await account_text(lang, chat_id)
+    await edit(f"{msg}\n\n{text}", kb_account(lang))
 
 
 async def _start_loc(chat_id, lang, edit):
