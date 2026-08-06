@@ -1,0 +1,110 @@
+{
+  "theme_strategy": "dark_only",
+  "direction": "bilingual_rtl_ltr",
+  "typography": {
+    "headings": {
+      "font_family": "Outfit, sans-serif",
+      "arabic_fallback": "Cairo, sans-serif",
+      "weights": ["light", "bold", "black"],
+      "rules": "Never center by default. Use tracking-tight. Max text-6xl. Break the generic font mold."
+    },
+    "body": {
+      "font_family": "IBM Plex Sans, sans-serif",
+      "arabic_fallback": "IBM Plex Sans Arabic, sans-serif",
+      "weights": ["regular", "medium"]
+    },
+    "mono": {
+      "font_family": "JetBrains Mono, monospace",
+      "usage": "Use exclusively for OSINT data, bot commands, IPs, and analytical stats."
+    }
+  },
+  "colors": {
+    "archetype": "Swiss High-Contrast + Retro-Futurism",
+    "backgrounds": {
+      "base": "#050505",
+      "surface": "#0F0F11",
+      "surface_elevated": "#18181B"
+    },
+    "text": {
+      "primary": "#FAFAFA",
+      "secondary": "#A1A1AA",
+      "muted": "#52525B"
+    },
+    "accents": {
+      "brand_primary": "#00F0FF",
+      "brand_secondary": "#7000FF",
+      "success": "#34D399",
+      "warning": "#FBBF24",
+      "danger": "#EF4444"
+    },
+    "rules": "No standard gradients. Rely on true blacks and dark navys. Accent colors should be used for status, progress, and 1px borders. Text must meet APCA contrast minimums."
+  },
+  "layouts": {
+    "landing_page": {
+      "strategy": "Asymmetric Bento Grid (MODE A).",
+      "hero": "Dark overlay (bg-black/50 maximum). Technical typography. Left-aligned text.",
+      "features": "Bento layout with 1px grid borders."
+    },
+    "admin_dashboard": {
+      "strategy": "High Density Grid (MODE B).",
+      "cards": "Flat solid surfaces. 1px border (border-white/10). No soft shadows."
+    }
+  },
+  "rtl_guidelines": {
+    "rule_1": "CRITICAL: Use Tailwind logical properties exclusively: ps-4, pe-4, ms-2, me-2, ms-auto instead of pl-4, pr-4, ml-2, mr-2, ml-auto.",
+    "rule_2": "Use text-start and text-end instead of text-left and text-right.",
+    "rule_3": "Use space-s-4 instead of space-x-4.",
+    "rule_4": "Use rounded-s-md, rounded-e-md instead of rounded-l-md, rounded-r-md.",
+    "rule_5": "Ensure directional icons (like arrows) are flipped when dir='rtl' using rtl:-scale-x-100."
+  },
+  "surfaces": {
+    "cards": "Grid Borders (Technical Look). border-r border-b on grid items. Flat backgrounds.",
+    "headers": "Crystal Glass: backdrop-blur-xl bg-black/60 with 1px bottom border border-white/10. NO purely transparent backgrounds.",
+    "effects": "Use 'Tracing Beam' style glowing animated borders for the Elite/Pro Pricing tiers."
+  },
+  "motion": {
+    "libraries": ["framer-motion"],
+    "rules": "Subtle entrance animations. Respect prefers-reduced-motion. Don't use transition-all. Use specific properties like transition-transform or transition-opacity."
+  },
+  "visual_enhancers": {
+    "backgrounds": "Use subtle grain/noise CSS overlays (opacity 3-5%) over solid dark colors to create depth.",
+    "borders": "Expose the skeleton. Heavy use of 1px borders (border-border) to define layout sections. Add 'border-collapse' logic."
+  },
+  "image_urls": [
+    {
+      "url": "https://images.unsplash.com/photo-1624969862644-791f3dc98927?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NzR8MHwxfHNlYXJjaHw0fHxoYWNrZXIlMjBjb2RpbmclMjBkYXJrfGVufDB8fHx8MTc4NTk3NzU1M3ww&ixlib=rb-4.1.0&q=85",
+      "category": "hero_background",
+      "description": "Hacker hands typing in dark (Use with bg-black/50 overlay)"
+    },
+    {
+      "url": "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTV8MHwxfHNlYXJjaHwyfHxjeWJlcnNlY3VyaXR5JTIwYWJzdHJhY3QlMjBkYXRhfGVufDB8fHx8MTc4NTk3NzU1M3ww&ixlib=rb-4.1.0&q=85",
+      "category": "feature_osint",
+      "description": "Matrix abstract code falling"
+    },
+    {
+      "url": "https://images.unsplash.com/photo-1644088379091-d574269d422f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTV8MHwxfHNlYXJjaHwxfHxjeWJlcnNlY3VyaXR5JTIwYWJzdHJhY3QlMjBkYXRhfGVufDB8fHx8MTc4NTk3NzU1M3ww&ixlib=rb-4.1.0&q=85",
+      "category": "feature_analytics",
+      "description": "Blue data dots and network lines"
+    }
+  ],
+  "component_guidelines": {
+    "general": "Use Shadcn components but strip standard Vercel soft-look. Customize them for an Elite Security terminal vibe (sharp corners, high contrast).",
+    "buttons": "Sharp edges (rounded-none or rounded-sm). Hover state must increase brightness and show 1px cyan/red border.",
+    "tables": "Dense. JetBrains Mono for data columns. Status dots for active/inactive.",
+    "data_testid": "MANDATORY. Add data-testid to all interactive elements, links, and forms."
+  },
+  "instructions_to_main_agent": [
+    "Prioritize using pre-existing components from src/components/ui.",
+    "This is a JS project, strictly use .js/.jsx files, not .tsx files.",
+    "Implement a language toggler that switches document.dir to 'rtl' for Arabic, 'ltr' for English. Layout MUST adjust automatically via logical Tailwind properties.",
+    "NEVER use generic placeholder text or dummy image URLs.",
+    "For the admin dashboard, ensure a high-density, cardless design. Rely on borders instead of shadows.",
+    "Apply 'Grid Borders (The Technical Look)' layout to the pricing and features section.",
+    "Use lucide-react for sharp technical iconography.",
+    "Ensure contrast passes APCA/WCAG standards.",
+    "Do NOT add transition-all anywhere.",
+    "Do NOT center align the app container.",
+    "DO NOT use completely transparent backgrounds over content or headers. Use Crystal Glassmorphism instead.",
+    "Add 'data-testid' to all critical interactions (buttons, links, form inputs)."
+  ]
+}
