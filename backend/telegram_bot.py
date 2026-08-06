@@ -1,9 +1,11 @@
 """Telegram bot logic: bilingual menus, OSINT tools, academy, CTF, courses, subscriptions."""
 import html
+import re
+import secrets
 
 from core import (
     db, tg, PLANS, LIMITS, effective_plan, get_or_create_user,
-    set_state, set_lang, check_and_increment, now_utc,
+    set_state, set_lang, check_and_increment, now_utc, PUBLIC_BASE_URL,
 )
 import osint
 import content
@@ -21,6 +23,44 @@ def T(lang, ar, en):
     return ar if lang == "ar" else en
 
 
+async def telegram_public_info(username: str, lang="ar") -> str:
+    u = username.strip().lstrip("@").split("/")[-1]
+    if not re.match(r"^[A-Za-z0-9_]{4,32}$", u):
+        return T(lang, "❌ اسم مستخدم غير صالح. أرسل يوزر عام مثل <code>@durov</code>.",
+                 "❌ Invalid username. Send a public @username like <code>@durov</code>.")
+    res = await tg.get_chat("@" + u)
+    if not res.get("ok"):
+        return T(lang,
+                 "❌ لم أجد قناة/مجموعة/بوت عام بهذا الاسم.\n\n<i>ملاحظة: بيانات الحسابات الشخصية الخاصة (الرقم، الموقع) لا يمكن كشفها — هذا حماية للخصوصية وقانوني.</i>",
+                 "❌ No public channel/group/bot found.\n\n<i>Note: private personal account data (phone, location) cannot be revealed — that's privacy protection and the law.</i>")
+    c = res["result"]
+    ctype = c.get("type", "")
+    name = c.get("title") or (" ".join(filter(None, [c.get("first_name"), c.get("last_name")]))) or "—"
+    count = None
+    if ctype in ("channel", "group", "supergroup"):
+        cc = await tg.get_chat_member_count("@" + u)
+        if cc.get("ok"):
+            count = cc["result"]
+    type_map = {"channel": T(lang, "قناة", "Channel"), "supergroup": T(lang, "مجموعة عملاقة", "Supergroup"),
+                "group": T(lang, "مجموعة", "Group"), "private": T(lang, "حساب/بوت", "Account/Bot"),
+                "bot": T(lang, "بوت", "Bot")}
+    title = T(lang, "🔎 <b>معلومات كيان تليجرام العام</b>", "🔎 <b>Public Telegram Entity Info</b>")
+    lines = [title, "",
+             f"{T(lang,'الاسم','Name')}: <b>{esc(name)}</b>",
+             f"{T(lang,'المعرّف','Username')}: <code>@{esc(u)}</code>",
+             f"{T(lang,'النوع','Type')}: {type_map.get(ctype, esc(ctype))}",
+             f"{T(lang,'الرقم التعريفي','ID')}: <code>{esc(c.get('id'))}</code>"]
+    if count is not None:
+        lines.append(f"{T(lang,'عدد الأعضاء','Members')}: <code>{count:,}</code>")
+    bio = c.get("description") or c.get("bio")
+    if bio:
+        lines.append(f"\n{T(lang,'الوصف','Description')}:\n{esc(bio[:400])}")
+    if c.get("has_private_forwards") is not None or ctype == "private":
+        lines.append("\n<i>" + T(lang, "الحسابات الشخصية تُظهر فقط ما يجعله المستخدم عاماً.",
+                                  "Personal accounts show only what the user makes public.") + "</i>")
+    return "\n".join(lines)
+
+
 # ---------- tool registry ----------
 # key -> (function, ar_prompt, en_prompt, counts_against_limit)
 TOOLS = {
@@ -32,10 +72,14 @@ TOOLS = {
     "pwd":      (osint.password_pwned,  "🔑 أرسل كلمة المرور للتحقق إن كانت مسرّبة (لا نخزّنها)", "🔑 Send a password to check if it's pwned (we never store it)", True),
     "user":     (osint.username_search, "🕵️ أرسل اسم المستخدم للبحث عبر المنصات", "🕵️ Send a username to search across platforms", True),
     "url":      (osint.url_analyze,     "🔗 أرسل الرابط لتحليله", "🔗 Send a URL to analyze", True),
+    "urlmal":   (osint.url_malware_scan, "🛡️ أرسل الرابط لفحص إن كان خبيثاً/احتيالياً", "🛡️ Send a URL to scan for malicious/phishing", True),
     "emailval": (osint.email_validate,  "✅ أرسل البريد للتحقق من صحته", "✅ Send an email to verify", True),
+    "teleinfo": (telegram_public_info,  "🔎 أرسل يوزر قناة/بوت عام (مثال: @telegram)", "🔎 Send a public channel/bot @username (e.g. @telegram)", True),
+    "dorks":    (osint.google_dorks,    "🧰 أرسل نطاقاً لتوليد استعلامات Google Dorks", "🧰 Send a domain to generate Google Dorks", True),
     "hashgen":  (osint.hash_generate,   "🔐 أرسل نصاً لتوليد بصماته", "🔐 Send text to generate hashes", False),
     "hashid":   (osint.hash_identify,   "🧩 أرسل البصمة لتحديد نوعها", "🧩 Send a hash to identify its type", False),
     "b64":      (osint.base64_tool,     "🔁 أرسل نصاً للترميز/فك الترميز Base64", "🔁 Send text to Base64 encode/decode", False),
+    "genpass":  (osint.password_generator, "🔑 أرسل الطول المطلوب (8-64) أو أرسل أي شيء لطول 16", "🔑 Send desired length (8-64) or anything for length 16", False),
 }
 
 
@@ -62,11 +106,16 @@ def kb_osint(lang):
         [{"text": T(lang, "📧 فحص تسريب بريد", "📧 Email Breach"), "callback_data": "tool:email"},
          {"text": T(lang, "🔑 كلمة مرور مسرّبة", "🔑 Pwned Password"), "callback_data": "tool:pwd"}],
         [{"text": T(lang, "🕵️ بحث اسم مستخدم", "🕵️ Username Search"), "callback_data": "tool:user"},
-         {"text": T(lang, "🔗 تحليل رابط", "🔗 URL Analysis"), "callback_data": "tool:url"}],
-        [{"text": T(lang, "✅ تحقق بريد", "✅ Email Verify"), "callback_data": "tool:emailval"},
-         {"text": T(lang, "🔐 مولّد Hash", "🔐 Hash Gen"), "callback_data": "tool:hashgen"}],
-        [{"text": T(lang, "🧩 تحديد Hash", "🧩 Hash ID"), "callback_data": "tool:hashid"},
-         {"text": T(lang, "🔁 Base64", "🔁 Base64"), "callback_data": "tool:b64"}],
+         {"text": T(lang, "🛡️ فاحص روابط خبيثة", "🛡️ Malicious URL"), "callback_data": "tool:urlmal"}],
+        [{"text": T(lang, "🔗 تحليل رابط", "🔗 URL Analysis"), "callback_data": "tool:url"},
+         {"text": T(lang, "✅ تحقق بريد", "✅ Email Verify"), "callback_data": "tool:emailval"}],
+        [{"text": T(lang, "🔎 معلومات كيان تليجرام", "🔎 Telegram Entity"), "callback_data": "tool:teleinfo"},
+         {"text": T(lang, "🧰 Google Dorks", "🧰 Google Dorks"), "callback_data": "tool:dorks"}],
+        [{"text": T(lang, "📍 مشاركة موقع (بموافقة)", "📍 Location Share (consent)"), "callback_data": "tool:loc"}],
+        [{"text": T(lang, "🔐 مولّد Hash", "🔐 Hash Gen"), "callback_data": "tool:hashgen"},
+         {"text": T(lang, "🧩 تحديد Hash", "🧩 Hash ID"), "callback_data": "tool:hashid"}],
+        [{"text": T(lang, "🔁 Base64", "🔁 Base64"), "callback_data": "tool:b64"},
+         {"text": T(lang, "🔑 مولّد كلمة مرور", "🔑 Password Gen"), "callback_data": "tool:genpass"}],
         [{"text": T(lang, "⬅️ رجوع", "⬅️ Back"), "callback_data": "menu:main"}],
     ]
     return rows
@@ -307,6 +356,8 @@ async def _handle_callback(cq):
         await edit(await account_text(lang, chat_id), kb_back(lang))
     elif data == "menu:upgrade":
         await edit(upgrade_text(lang), kb_upgrade(lang))
+    elif data == "tool:loc":
+        await _start_loc(chat_id, lang, edit)
     elif data.startswith("tool:"):
         key = data.split(":", 1)[1]
         await set_state(chat_id, f"await:{key}")
@@ -410,6 +461,47 @@ async def _leaderboard_text(lang):
     if len(lines) <= 2:
         lines.append(T(lang, "لا يوجد نقاط بعد. كن الأول! 🚀", "No points yet. Be the first! 🚀"))
     return "\n".join(lines)
+
+
+async def _start_loc(chat_id, lang, edit):
+    token = secrets.token_urlsafe(9)
+    await db.loc_requests.insert_one({
+        "token": token, "requester_tid": chat_id, "status": "pending",
+        "lat": None, "lon": None, "created_at": now_utc().isoformat(),
+    })
+    link = f"{PUBLIC_BASE_URL}/loc/{token}"
+    if lang == "ar":
+        text = (
+            "📍 <b>مشاركة موقع بموافقة صريحة</b>\n\n"
+            "أنشأنا لك رابطاً. أرسله لشخص <b>بعلمه</b>. عندما يفتحه سيظهر له طلب واضح: «هل تشارك موقعك؟». "
+            "إذا وافق فقط، سيصلك موقعه هنا مع رابط خريطة.\n\n"
+            f"🔗 <b>رابطك:</b>\n<code>{esc(link)}</code>\n\n"
+            "<i>هذه أداة شفّافة وقانونية للأصدقاء واللقاءات — ليست تتبّعاً سرّياً.</i>"
+        )
+    else:
+        text = (
+            "📍 <b>Consent-based location share</b>\n\n"
+            "We created a link. Send it to a person <b>who knows about it</b>. When they open it, they'll see a clear prompt: 'Share your location?'. "
+            "Only if they agree, you'll receive their location here with a map link.\n\n"
+            f"🔗 <b>Your link:</b>\n<code>{esc(link)}</code>\n\n"
+            "<i>This is a transparent, legal tool for friends & meetups — not covert tracking.</i>"
+        )
+    await edit(text, kb_back(lang, "menu:osint"))
+
+
+async def notify_location(requester_tid, token, lat, lon, accuracy=None):
+    user = await db.users.find_one({"telegram_id": requester_tid})
+    lang = (user or {}).get("lang", "ar")
+    maps = f"https://www.google.com/maps?q={lat},{lon}"
+    if lang == "ar":
+        text = (f"📍 <b>وصل موقع مشارَك!</b>\n\nالإحداثيات: <code>{lat}, {lon}</code>\n"
+                + (f"الدقة: ~{int(accuracy)}m\n" if accuracy else "")
+                + f"\n🗺️ افتح الخريطة: {maps}")
+    else:
+        text = (f"📍 <b>A shared location arrived!</b>\n\nCoords: <code>{lat}, {lon}</code>\n"
+                + (f"Accuracy: ~{int(accuracy)}m\n" if accuracy else "")
+                + f"\n🗺️ Open map: {maps}")
+    await tg.send_message(requester_tid, text, disable_preview=False)
 
 
 async def _start_checkout(chat_id, lang, pkg):

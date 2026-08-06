@@ -4,6 +4,7 @@ import { Toaster } from "sonner";
 import { LanguageProvider } from "@/i18n";
 import Landing from "@/pages/Landing";
 import Admin from "@/pages/Admin";
+import Loc from "@/pages/Loc";
 import { PaymentSuccess, PaymentCancel } from "@/pages/Payment";
 
 function App() {
@@ -14,6 +15,7 @@ function App() {
           <Routes>
             <Route path="/" element={<Landing />} />
             <Route path="/admin" element={<Admin />} />
+            <Route path="/loc/:token" element={<Loc />} />
             <Route path="/payment/success" element={<PaymentSuccess />} />
             <Route path="/payment/cancel" element={<PaymentCancel />} />
           </Routes>

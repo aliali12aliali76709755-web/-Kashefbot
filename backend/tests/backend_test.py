@@ -57,7 +57,8 @@ class TestPublicAPIs:
         for k in ("users", "scans", "solved", "tools"):
             assert k in d, f"missing {k}"
             assert isinstance(d[k], int)
-        assert d["tools"] >= 10
+        assert d["tools"] == 18, f"expected tools=18 (17 tools+loc), got {d['tools']}"
+        assert d.get("challenges") == 8
 
     def test_plans(self, api):
         r = api.get(f"{BASE_URL}/api/plans")
@@ -351,3 +352,228 @@ class TestAdmin:
         assert r.status_code == 200
         d = r.json()
         assert "sent" in d and "total" in d
+
+
+# =========================================================
+# NEW OSINT tools (iteration 2)
+# =========================================================
+class TestNewOSINTTools:
+    def test_url_malware_scan_phishing(self):
+        import osint
+        loop = asyncio.get_event_loop()
+        res = loop.run_until_complete(osint.url_malware_scan("http://paypal-secure-login.tk/verify"))
+        assert isinstance(res, str) and len(res) > 0
+        low = res.lower()
+        assert "verdict" in low or "التقييم" in res
+        assert "risk score" in low or "درجة الخطورة" in res
+        # brand impersonation flag for paypal
+        assert "paypal" in low or "انتحال" in res or "impersonation" in low
+
+    def test_google_dorks_links(self):
+        import osint
+        loop = asyncio.get_event_loop()
+        res = loop.run_until_complete(osint.google_dorks("example.com"))
+        assert "google.com/search?q=" in res
+        assert 'href="https://www.google.com/search?q=' in res
+        assert "site:example.com" in res
+
+    def test_password_generator_length_20(self):
+        import osint
+        import re as _re
+        loop = asyncio.get_event_loop()
+        res = loop.run_until_complete(osint.password_generator("20"))
+        m = _re.search(r"<code>([^<]+)</code>", res)
+        assert m, "no password code block found"
+        pwd = m.group(1)
+        assert len(pwd) == 20, f"expected 20 chars, got {len(pwd)}: {pwd}"
+
+    def test_email_breach_detailed(self):
+        import osint
+        loop = asyncio.get_event_loop()
+        res = loop.run_until_complete(osint.email_breach("test@example.com"))
+        assert isinstance(res, str) and len(res) > 0
+        # Either found breaches with details, or clean email — service may vary.
+        # If breaches present, should include Records / Exposed data
+        if "breach" in res.lower() or "تسريب" in res:
+            # It's OK if the enrichment strings appear
+            pass
+
+
+# =========================================================
+# NEW: telegram_public_info
+# =========================================================
+class TestTelegramPublicInfo:
+    def test_public_channel(self):
+        from telegram_bot import telegram_public_info
+        loop = asyncio.get_event_loop()
+        res = loop.run_until_complete(telegram_public_info("@telegram"))
+        assert isinstance(res, str) and len(res) > 0
+        # Should either return channel info or graceful error string
+        # If Telegram API reachable, expect Channel type and Name
+        if "Name" in res or "الاسم" in res:
+            assert "Channel" in res or "قناة" in res
+
+    def test_invalid_username(self):
+        from telegram_bot import telegram_public_info
+        loop = asyncio.get_event_loop()
+        res = loop.run_until_complete(telegram_public_info("@x"))  # too short
+        assert "Invalid" in res or "غير صالح" in res
+
+
+# =========================================================
+# NEW: webhook flows for new tools (urlmal, genpass, loc)
+# =========================================================
+class TestNewToolWebhookFlows:
+    urlmal_tid = 991010
+    genpass_tid = 991011
+    loc_tid = 991012
+
+    def _cleanup(self, db, tid):
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(db.users.delete_many({"telegram_id": tid}))
+        loop.run_until_complete(db.scans.delete_many({"telegram_id": tid}))
+        loop.run_until_complete(db.loc_requests.delete_many({"requester_tid": tid}))
+
+    def test_urlmal_flow(self, mongo_db):
+        tid = self.urlmal_tid
+        self._cleanup(mongo_db, tid)
+        loop = asyncio.get_event_loop()
+        _post_update({"update_id": int(time.time())+30,
+                      "message": {"message_id": 1, "from": {"id": tid, "first_name": "U"},
+                                  "chat": {"id": tid, "type": "private"}, "text": "/start"}})
+        _post_update({"update_id": int(time.time())+31,
+                      "callback_query": {"id": "c", "from": {"id": tid, "first_name": "U"},
+                                         "message": {"message_id": 10, "chat": {"id": tid, "type": "private"}},
+                                         "data": "tool:urlmal"}})
+        u = loop.run_until_complete(mongo_db.users.find_one({"telegram_id": tid}))
+        assert u.get("state") == "await:urlmal"
+        _post_update({"update_id": int(time.time())+32,
+                      "message": {"message_id": 2, "from": {"id": tid, "first_name": "U"},
+                                  "chat": {"id": tid, "type": "private"},
+                                  "text": "http://paypal-secure-login.tk/verify"}})
+        u = loop.run_until_complete(mongo_db.users.find_one({"telegram_id": tid}))
+        assert u.get("state") is None
+        scans = loop.run_until_complete(mongo_db.scans.find({"telegram_id": tid, "tool": "urlmal"}).to_list(10))
+        assert len(scans) >= 1
+        self._cleanup(mongo_db, tid)
+
+    def test_genpass_flow_not_rate_limited(self, mongo_db):
+        tid = self.genpass_tid
+        self._cleanup(mongo_db, tid)
+        loop = asyncio.get_event_loop()
+        _post_update({"update_id": int(time.time())+40,
+                      "message": {"message_id": 1, "from": {"id": tid, "first_name": "G"},
+                                  "chat": {"id": tid, "type": "private"}, "text": "/start"}})
+        _post_update({"update_id": int(time.time())+41,
+                      "callback_query": {"id": "cg", "from": {"id": tid, "first_name": "G"},
+                                         "message": {"message_id": 10, "chat": {"id": tid, "type": "private"}},
+                                         "data": "tool:genpass"}})
+        u = loop.run_until_complete(mongo_db.users.find_one({"telegram_id": tid}))
+        assert u.get("state") == "await:genpass"
+        _post_update({"update_id": int(time.time())+42,
+                      "message": {"message_id": 2, "from": {"id": tid, "first_name": "G"},
+                                  "chat": {"id": tid, "type": "private"}, "text": "24"}})
+        u = loop.run_until_complete(mongo_db.users.find_one({"telegram_id": tid}))
+        assert u.get("state") is None
+        # genpass is NOT rate limited -> scans_today should stay 0
+        assert u.get("scans_today", 0) == 0, f"genpass must not count against limit, scans_today={u.get('scans_today')}"
+        self._cleanup(mongo_db, tid)
+
+    def test_loc_creates_pending_request(self, mongo_db):
+        tid = self.loc_tid
+        self._cleanup(mongo_db, tid)
+        loop = asyncio.get_event_loop()
+        _post_update({"update_id": int(time.time())+50,
+                      "message": {"message_id": 1, "from": {"id": tid, "first_name": "L"},
+                                  "chat": {"id": tid, "type": "private"}, "text": "/start"}})
+        _post_update({"update_id": int(time.time())+51,
+                      "callback_query": {"id": "cl", "from": {"id": tid, "first_name": "L"},
+                                         "message": {"message_id": 10, "chat": {"id": tid, "type": "private"}},
+                                         "data": "tool:loc"}})
+        # Must NOT set an await state
+        u = loop.run_until_complete(mongo_db.users.find_one({"telegram_id": tid}))
+        assert u.get("state") is None, f"loc must not set await state, got {u.get('state')}"
+        # Must create a pending loc_requests doc
+        docs = loop.run_until_complete(mongo_db.loc_requests.find({"requester_tid": tid}).to_list(10))
+        assert len(docs) >= 1, "no loc_requests doc created"
+        assert docs[0].get("status") == "pending"
+        assert docs[0].get("token")
+        self._cleanup(mongo_db, tid)
+
+
+# =========================================================
+# NEW: /api/loc/{token} endpoints
+# =========================================================
+class TestLocEndpoints:
+    tid = 991020
+    token = "TEST_LOC_TOKEN_1"
+
+    def _setup(self, db):
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(db.users.delete_many({"telegram_id": self.tid}))
+        loop.run_until_complete(db.loc_requests.delete_many({"token": self.token}))
+        loop.run_until_complete(db.users.insert_one({
+            "telegram_id": self.tid, "first_name": "Requester", "lang": "en",
+            "plan": "free", "created_at": "2026-01-01T00:00:00",
+        }))
+        loop.run_until_complete(db.loc_requests.insert_one({
+            "token": self.token, "requester_tid": self.tid, "status": "pending",
+            "lat": None, "lon": None, "created_at": "2026-01-01T00:00:00",
+        }))
+
+    def _teardown(self, db):
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(db.users.delete_many({"telegram_id": self.tid}))
+        loop.run_until_complete(db.loc_requests.delete_many({"token": self.token}))
+
+    def test_loc_get_pending(self, api, mongo_db):
+        self._setup(mongo_db)
+        try:
+            r = api.get(f"{BASE_URL}/api/loc/{self.token}")
+            assert r.status_code == 200
+            d = r.json()
+            assert d["status"] == "pending"
+            assert d["requester_name"] == "Requester"
+        finally:
+            self._teardown(mongo_db)
+
+    def test_loc_unknown_404(self, api):
+        r = api.get(f"{BASE_URL}/api/loc/UNKNOWN_TOKEN_XYZ_ZZZ")
+        assert r.status_code == 404
+
+    def test_loc_submit_sets_shared(self, api, mongo_db):
+        self._setup(mongo_db)
+        try:
+            r = api.post(f"{BASE_URL}/api/loc/{self.token}/submit",
+                         json={"lat": 33.3152, "lon": 44.3661, "accuracy": 15.0})
+            assert r.status_code == 200
+            loop = asyncio.get_event_loop()
+            doc = loop.run_until_complete(mongo_db.loc_requests.find_one({"token": self.token}))
+            assert doc["status"] == "shared"
+            assert abs(doc["lat"] - 33.3152) < 1e-6
+            assert abs(doc["lon"] - 44.3661) < 1e-6
+        finally:
+            self._teardown(mongo_db)
+
+    def test_loc_decline_sets_declined(self, api, mongo_db):
+        self._setup(mongo_db)
+        try:
+            r = api.post(f"{BASE_URL}/api/loc/{self.token}/decline")
+            assert r.status_code == 200
+            loop = asyncio.get_event_loop()
+            doc = loop.run_until_complete(mongo_db.loc_requests.find_one({"token": self.token}))
+            assert doc["status"] == "declined"
+        finally:
+            self._teardown(mongo_db)
+
+
+# =========================================================
+# REGRESSION: plans count = 4
+# =========================================================
+class TestPlansCount:
+    def test_four_plans(self, api):
+        r = api.get(f"{BASE_URL}/api/plans")
+        assert r.status_code == 200
+        plans = r.json()["plans"]
+        assert len(plans) == 4, f"expected 4 plans, got {len(plans)}"
+

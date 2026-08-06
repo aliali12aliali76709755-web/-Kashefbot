@@ -4,6 +4,9 @@ import base64 as b64
 import hashlib
 import html
 import re
+import secrets
+import string
+from urllib.parse import quote_plus, urlparse
 
 import httpx
 import phonenumbers
@@ -170,30 +173,45 @@ async def email_breach(email: str, lang="ar") -> str:
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
         return _t(lang, "❌ صيغة البريد غير صحيحة.", "❌ Invalid email format.")
     try:
-        async with httpx.AsyncClient(timeout=20) as c:
-            r = await c.get(f"https://api.xposedornot.com/v1/check-email/{email}", headers={"User-Agent": UA})
+        async with httpx.AsyncClient(timeout=25) as c:
+            r = await c.get(f"https://api.xposedornot.com/v1/breach-analytics?email={email}",
+                            headers={"User-Agent": UA})
             d = r.json()
     except Exception:
         return _t(lang, "❌ تعذّر الاتصال بخدمة الفحص.", "❌ Could not reach the breach service.")
-    breaches = []
-    if isinstance(d, dict) and d.get("breaches"):
-        raw = d["breaches"]
-        if raw and isinstance(raw[0], list):
-            breaches = raw[0]
-        else:
-            breaches = raw
-    if not breaches:
+    exposed = (((d or {}).get("ExposedBreaches") or {}).get("breaches_details")) or []
+    if not exposed:
         return _t(lang,
                   f"✅ <b>بريد آمن</b>\n\n<code>{e(email)}</code>\nلم يظهر في أي تسريب معروف. 🎉",
                   f"✅ <b>Good news</b>\n\n<code>{e(email)}</code>\nNot found in any known breach. 🎉")
     title = _t(lang, "⚠️ <b>تم العثور على تسريبات!</b>", "⚠️ <b>Breaches found!</b>")
     body = _t(lang,
-              f"البريد <code>{e(email)}</code> ظهر في <b>{len(breaches)}</b> تسريب:",
-              f"<code>{e(email)}</code> appeared in <b>{len(breaches)}</b> breach(es):")
-    items = "\n".join(f"• {e(b)}" for b in breaches[:20])
-    tip = _t(lang, "\n\n🔐 غيّر كلمة المرور فوراً وفعّل التحقق بخطوتين.",
-             "\n\n🔐 Change your password now and enable 2FA.")
-    return f"{title}\n\n{body}\n{items}{tip}"
+              f"البريد <code>{e(email)}</code> ظهر في <b>{len(exposed)}</b> تسريب. التفاصيل:",
+              f"<code>{e(email)}</code> appeared in <b>{len(exposed)}</b> breach(es). Details:")
+    rec_l = _t(lang, "عدد السجلات", "Records")
+    data_l = _t(lang, "بيانات مكشوفة", "Exposed data")
+    ind_l = _t(lang, "القطاع", "Industry")
+    blocks = []
+    for b in exposed[:12]:
+        name = b.get("breach") or b.get("name") or "—"
+        year = b.get("xposed_date") or b.get("year") or "—"
+        data = (b.get("xposed_data") or "").replace(";", " · ")
+        recs = b.get("xposed_records") or 0
+        ind = b.get("industry") or ""
+        blk = f"\n<b>• {e(name)}</b> ({e(year)})"
+        try:
+            if int(recs) > 0:
+                blk += f"\n   {rec_l}: <code>{int(recs):,}</code>"
+        except Exception:
+            pass
+        if data:
+            blk += f"\n   {data_l}: {e(data)}"
+        if ind and ind not in ("", "xx"):
+            blk += f"\n   {ind_l}: {e(ind)}"
+        blocks.append(blk)
+    tip = _t(lang, "\n\n🔐 غيّر كلمات المرور المرتبطة وفعّل التحقق بخطوتين فوراً.",
+             "\n\n🔐 Change related passwords and enable 2FA immediately.")
+    return f"{title}\n\n{body}\n" + "\n".join(blocks) + tip
 
 
 async def password_pwned(password: str, lang="ar") -> str:
@@ -386,3 +404,102 @@ async def base64_tool(text: str, lang="ar") -> str:
     except Exception:
         dec = _t(lang, "(ليس Base64 صالح)", "(not valid Base64)")
     return f"{title}\n\n{_t(lang,'ترميز','Encode')}:\n<code>{e(enc)}</code>\n\n{_t(lang,'فك الترميز','Decode')}:\n<code>{e(dec)}</code>"
+
+
+async def url_malware_scan(url: str, lang="ar") -> str:
+    url = url.strip()
+    if not url.startswith(("http://", "https://")):
+        url = "http://" + url
+    p = urlparse(url)
+    host = (p.netloc or "").lower()
+    score = 0
+    flags = []
+    if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", host.split(":")[0]):
+        score += 2; flags.append(_t(lang, "IP بدل اسم نطاق", "IP instead of domain"))
+    if "@" in url:
+        score += 2; flags.append(_t(lang, "رمز @ في الرابط", "@ symbol in URL"))
+    if host.count("-") >= 3:
+        score += 1; flags.append(_t(lang, "شرطات كثيرة", "many hyphens"))
+    if len(host.split(".")) > 4:
+        score += 1; flags.append(_t(lang, "نطاقات فرعية كثيرة", "many subdomains"))
+    if "xn--" in host:
+        score += 2; flags.append(_t(lang, "punycode (تمويه أحرف)", "punycode homograph"))
+    susp_tld = (".zip", ".mov", ".xyz", ".top", ".club", ".gq", ".tk", ".ml", ".cf", ".work", ".click", ".loan", ".rest")
+    if host.endswith(susp_tld):
+        score += 1; flags.append(_t(lang, "امتداد مشبوه", "suspicious TLD"))
+    brands = ["paypal", "apple", "google", "facebook", "instagram", "microsoft", "whatsapp", "binance", "netflix", "amazon", "telegram", "bank"]
+    hit = next((b for b in brands if b in host), None)
+    if hit and not (host == f"{hit}.com" or host.endswith(f".{hit}.com")):
+        score += 3; flags.append(_t(lang, f"انتحال علامة ({hit})", f"brand impersonation ({hit})"))
+    if len(url) > 90:
+        score += 1; flags.append(_t(lang, "رابط طويل جداً", "very long URL"))
+    if p.scheme != "https":
+        score += 1; flags.append(_t(lang, "بدون HTTPS", "no HTTPS"))
+    shorteners = {"bit.ly", "tinyurl.com", "goo.gl", "t.co", "ow.ly", "is.gd", "cutt.ly", "rebrand.ly", "shorturl.at"}
+    if host in shorteners:
+        flags.append(_t(lang, "رابط مختصر (وجهة مخفية)", "shortener (hidden destination)"))
+    urlhaus_note = None
+    try:
+        async with httpx.AsyncClient(timeout=12) as c:
+            r = await c.post("https://urlhaus-api.abuse.ch/v1/host/", data={"host": host.split(":")[0]})
+            j = r.json()
+            if j.get("query_status") == "ok" and j.get("urls"):
+                score += 6
+                urlhaus_note = _t(lang, "🚨 مُدرج في قاعدة URLhaus لمواقع البرمجيات الخبيثة!",
+                                  "🚨 Listed in the URLhaus malware database!")
+    except Exception:
+        pass
+    if score >= 6:
+        verdict = _t(lang, "🔴 خطير جداً — لا تفتحه", "🔴 Dangerous — do not open")
+    elif score >= 3:
+        verdict = _t(lang, "🟠 مشبوه — احذر", "🟠 Suspicious — be careful")
+    else:
+        verdict = _t(lang, "🟢 يبدو آمناً (لا ضمان مطلق)", "🟢 Looks safe (no absolute guarantee)")
+    title = _t(lang, "🛡️ <b>فاحص الروابط الخبيثة</b>", "🛡️ <b>Malicious URL Scanner</b>")
+    lines = [title, "",
+             f"{_t(lang,'الرابط','URL')}: <code>{e(url[:120])}</code>",
+             f"{_t(lang,'النطاق','Host')}: <code>{e(host)}</code>",
+             f"{_t(lang,'التقييم','Verdict')}: <b>{verdict}</b>",
+             f"{_t(lang,'درجة الخطورة','Risk score')}: <b>{score}/10</b>"]
+    if urlhaus_note:
+        lines.append(urlhaus_note)
+    if flags:
+        lines.append("\n" + _t(lang, "المؤشرات:", "Indicators:"))
+        lines += [f"• {f}" for f in flags]
+    return "\n".join(lines)
+
+
+async def password_generator(text: str, lang="ar") -> str:
+    digits = re.sub(r"\D", "", text or "")
+    n = int(digits) if digits else 16
+    n = min(max(n, 8), 64)
+    alphabet = string.ascii_letters + string.digits + "!@#$%^&*()-_=+[]{}?"
+    pwd = "".join(secrets.choice(alphabet) for _ in range(n))
+    title = _t(lang, "🔑 <b>مولّد كلمات مرور قوية</b>", "🔑 <b>Strong Password Generator</b>")
+    hint = _t(lang, f"تم توليد كلمة مرور بطول {n} حرفاً:", f"Generated a {n}-character password:")
+    tip = _t(lang, "\n\n💡 أرسل رقماً (8-64) لتحديد الطول.", "\n\n💡 Send a number (8-64) to set the length.")
+    return f"{title}\n\n{hint}\n<code>{e(pwd)}</code>{tip}"
+
+
+async def google_dorks(target: str, lang="ar") -> str:
+    t = target.strip().replace("http://", "").replace("https://", "").split("/")[0]
+    if not t:
+        return _t(lang, "❌ أرسل نطاقاً أو كلمة مفتاحية.", "❌ Send a domain or keyword.")
+    dorks = [
+        (_t(lang, "ملفات PDF", "PDF documents"), f'site:{t} filetype:pdf'),
+        (_t(lang, "صفحات تسجيل الدخول", "Login pages"), f'site:{t} inurl:login'),
+        (_t(lang, "فهرسة المجلدات المكشوفة", "Open directory listing"), f'site:{t} intitle:"index of"'),
+        (_t(lang, "ملفات إعدادات حسّاسة", "Sensitive config files"), f'site:{t} ext:env | ext:ini | ext:conf'),
+        (_t(lang, "جداول بيانات", "Spreadsheets"), f'site:{t} filetype:xls | filetype:csv'),
+        (_t(lang, "النطاقات الفرعية", "Subdomains"), f'site:*.{t}'),
+        (_t(lang, "نسخ احتياطية", "Backups"), f'site:{t} ext:bak | ext:old | ext:sql'),
+        (_t(lang, "بريد على النطاق", "Emails on domain"), f'"@{t}"'),
+    ]
+    title = _t(lang, f"🧰 <b>مولّد Google Dorks لـ</b> <code>{e(t)}</code>", f"🧰 <b>Google Dorks for</b> <code>{e(t)}</code>")
+    note = _t(lang, "استعلامات بحث متقدمة للاستطلاع القانوني — اضغط للفتح:",
+              "Advanced search queries for legal recon — tap to open:")
+    lines = [title, "", note, ""]
+    for label, q in dorks:
+        link = "https://www.google.com/search?q=" + quote_plus(q)
+        lines.append(f"🔍 <a href=\"{link}\">{e(label)}</a>\n   <code>{e(q)}</code>")
+    return "\n".join(lines)

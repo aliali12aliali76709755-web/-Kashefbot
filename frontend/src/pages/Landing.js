@@ -6,6 +6,7 @@ import {
   Shield, Globe, Phone, Search, Network, Mail, KeyRound, UserSearch,
   Link2, Hash, Binary, GraduationCap, Flag, Code2, Terminal, ArrowRight,
   Check, Send, Lock, Zap, Trophy, Activity, ScanLine, Fingerprint, X,
+  ShieldAlert, MapPin, Wand2,
 } from "lucide-react";
 import { useLang } from "@/i18n";
 
@@ -154,11 +155,16 @@ const TOOLS = [
   { icon: Mail, ar: "فحص تسريب البريد", en: "Email Breach" },
   { icon: KeyRound, ar: "كلمة مرور مسرّبة", en: "Pwned Password" },
   { icon: UserSearch, ar: "بحث اسم مستخدم", en: "Username Search" },
+  { icon: ShieldAlert, ar: "فاحص روابط خبيثة", en: "Malicious URL" },
   { icon: Link2, ar: "تحليل الروابط", en: "URL Analysis" },
+  { icon: MapPin, ar: "مشاركة موقع بموافقة", en: "Consent Location" },
+  { icon: Send, ar: "معلومات كيان تليجرام", en: "Telegram Entity" },
+  { icon: Wand2, ar: "مولّد Google Dorks", en: "Google Dorks" },
   { icon: Check, ar: "تحقق البريد", en: "Email Verify" },
   { icon: Hash, ar: "مولّد Hash", en: "Hash Generator" },
   { icon: Fingerprint, ar: "تحديد نوع Hash", en: "Hash Identifier" },
   { icon: Binary, ar: "أداة Base64", en: "Base64 Tool" },
+  { icon: Lock, ar: "مولّد كلمات مرور", en: "Password Gen" },
 ];
 
 function Tools() {
@@ -168,7 +174,7 @@ function Tools() {
       <motion.div initial="hidden" whileInView="show" viewport={{ once: true }} variants={fade}>
         <p className="font-mono text-sm text-cyan">// {tr("مصادر مفتوحة · قانونية", "open sources · legal")}</p>
         <h2 className="mt-3 font-display text-3xl font-black tracking-tight md:text-5xl">
-          {tr("12 أداة OSINT جاهزة", "12 OSINT Tools, Ready")}
+          {tr("17 أداة OSINT وحماية جاهزة", "17 OSINT & Security Tools")}
         </h2>
         <p className="mt-4 max-w-2xl text-zinc-400">
           {tr("كل أداة تعمل مباشرة داخل تليجرام، تعتمد بيانات عامة ومجانية بالكامل.",
@@ -196,7 +202,7 @@ function Learn() {
     { icon: GraduationCap, ar: "أكاديمية الاختراق الأخلاقي", en: "Ethical Hacking Academy",
       dar: "5 مسارات: استطلاع، أمن الويب OWASP، الشبكات، التشفير، لينكس.", den: "5 tracks: recon, OWASP web, networking, crypto, Linux.", tag: "5 tracks" },
     { icon: Flag, ar: "تحديات CTF", en: "CTF Challenges",
-      dar: "تحديات تفاعلية بنقاط ولوحة متصدّرين لصقل مهاراتك.", den: "Interactive point-based challenges with a live leaderboard.", tag: "6 challenges" },
+      dar: "تحديات تفاعلية بنقاط ولوحة متصدّرين لصقل مهاراتك.", den: "Interactive point-based challenges with a live leaderboard.", tag: "8 challenges" },
     { icon: Code2, ar: "تعلّم البرمجة", en: "Learn to Code",
       dar: "دورات بايثون، جافاسكربت، Bash وأساسيات الأمن من الصفر.", den: "Python, JavaScript, Bash & security basics from zero.", tag: "4 courses" },
   ];

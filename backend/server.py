@@ -5,7 +5,7 @@ import os
 import logging
 import asyncio
 
-from core import db, tg, PLANS, ADMIN_KEY, TELEGRAM_WEBHOOK_SECRET, PUBLIC_BASE_URL, effective_plan
+from core import db, tg, PLANS, ADMIN_KEY, TELEGRAM_WEBHOOK_SECRET, PUBLIC_BASE_URL, effective_plan, now_utc
 import telegram_bot
 from payments import payments_router
 
@@ -45,9 +45,49 @@ async def public_stats():
     users = await db.users.count_documents({})
     scans = await db.scans.count_documents({})
     solved = await db.ctf_submissions.count_documents({"correct": True})
-    tools = len(telegram_bot.TOOLS)
+    tools = len(telegram_bot.TOOLS) + 1
     return {"users": users, "scans": scans, "solved": solved, "tools": tools,
-            "academy_tracks": 5, "challenges": 6, "courses": 4}
+            "academy_tracks": 5, "challenges": 8, "courses": 4}
+
+
+# ---------------- Consent-based location share ----------------
+class LocSubmit(BaseModel):
+    lat: float
+    lon: float
+    accuracy: float | None = None
+
+
+@api.get("/loc/{token}")
+async def loc_info(token: str):
+    req = await db.loc_requests.find_one({"token": token}, {"_id": 0})
+    if not req:
+        raise HTTPException(404, "not found")
+    requester = await db.users.find_one({"telegram_id": req["requester_tid"]}, {"_id": 0})
+    name = (requester or {}).get("first_name") or "A user"
+    return {"status": req["status"], "requester_name": name}
+
+
+@api.post("/loc/{token}/submit")
+async def loc_submit(token: str, body: LocSubmit):
+    req = await db.loc_requests.find_one({"token": token})
+    if not req:
+        raise HTTPException(404, "not found")
+    await db.loc_requests.update_one(
+        {"token": token},
+        {"$set": {"status": "shared", "lat": body.lat, "lon": body.lon,
+                  "accuracy": body.accuracy, "shared_at": now_utc().isoformat()}},
+    )
+    try:
+        await telegram_bot.notify_location(req["requester_tid"], token, body.lat, body.lon, body.accuracy)
+    except Exception as ex:
+        logger.warning("notify_location failed: %s", ex)
+    return {"ok": True}
+
+
+@api.post("/loc/{token}/decline")
+async def loc_decline(token: str):
+    await db.loc_requests.update_one({"token": token}, {"$set": {"status": "declined"}})
+    return {"ok": True}
 
 
 # ---------------- Admin ----------------

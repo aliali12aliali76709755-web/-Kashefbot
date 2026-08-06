@@ -98,6 +98,18 @@ class TelegramClient:
     async def get_me(self):
         return await self._call("getMe", {})
 
+    async def get_chat(self, chat):
+        return await self._call("getChat", {"chat_id": chat})
+
+    async def get_chat_member_count(self, chat):
+        return await self._call("getChatMemberCount", {"chat_id": chat})
+
+    async def get_file_url(self, file_id):
+        res = await self._call("getFile", {"file_id": file_id})
+        if res.get("ok"):
+            return f"https://api.telegram.org/file/bot{self.token}/{res['result']['file_path']}"
+        return None
+
 
 tg = TelegramClient(TELEGRAM_TOKEN)
 
