@@ -10,10 +10,20 @@ from motor.motor_asyncio import AsyncIOMotorClient
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
-MONGO_URL = os.environ.get("MONGO_URL", "mongodb://127.0.0.1:27017")
+MONGO_URL = os.environ.get("MONGO_URL", "")
 DB_NAME = os.environ.get("DB_NAME", "osint_bot")
-client = AsyncIOMotorClient(MONGO_URL, serverSelectionTimeoutMS=2000)
-db = client[DB_NAME]
+if MONGO_URL and ("mongodb+srv://" in MONGO_URL or not os.environ.get("RENDER")):
+    try:
+        client = AsyncIOMotorClient(MONGO_URL, serverSelectionTimeoutMS=2000)
+        db = client[DB_NAME]
+    except Exception:
+        from mongomock_motor import AsyncMongoMockClient
+        client = AsyncMongoMockClient()
+        db = client[DB_NAME]
+else:
+    from mongomock_motor import AsyncMongoMockClient
+    client = AsyncMongoMockClient()
+    db = client[DB_NAME]
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
