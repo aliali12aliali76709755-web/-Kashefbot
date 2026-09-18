@@ -89,11 +89,7 @@ def kb_main(lang, user=None):
     rows = [
         [{"text": T(lang, "🛰️ أدوات OSINT", "🛰️ OSINT Tools"), "callback_data": "menu:osint"}],
         [{"text": T(lang, "🎓 أكاديمية الاختراق الأخلاقي", "🎓 Ethical Hacking Academy"), "callback_data": "menu:academy"}],
-        [{"text": T(lang, "🚩 تحديات CTF", "🚩 CTF Challenges"), "callback_data": "menu:ctf"},
-         {"text": T(lang, "🏆 المتصدّرون", "🏆 Leaderboard"), "callback_data": "ctf:board"}],
         [{"text": T(lang, "💻 تعلّم البرمجة", "💻 Learn to Code"), "callback_data": "menu:courses"}],
-        [{"text": T(lang, "👤 حسابي", "👤 My Account"), "callback_data": "menu:account"},
-         {"text": T(lang, "💎 ترقية", "💎 Upgrade"), "callback_data": "menu:upgrade"}],
         [{"text": T(lang, "📖 شرح الميزات", "📖 Feature Guide"), "callback_data": "menu:guide"}],
         [{"text": T(lang, "🌐 English", "🌐 العربية"), "callback_data": "lang:toggle"}],
     ]
@@ -162,8 +158,7 @@ def kb_upgrade(lang):
 
 
 # ---------- screen texts ----------
-def main_text(lang, user):
-    plan = effective_plan(user).upper()
+def main_text(lang, user=None):
     if lang == "ar":
         return (
             "🛡️ <b>CYBER OSINT SUITE</b>\n"
@@ -171,9 +166,8 @@ def main_text(lang, user):
             "اختر من القائمة:\n"
             "• 🛰️ أدوات OSINT من مصادر عامة\n"
             "• 🎓 أكاديمية اختراق أخلاقي\n"
-            "• 🚩 تحديات CTF ونقاط\n"
-            "• 💻 تعلّم البرمجة\n\n"
-            f"باقتك الحالية: <b>{plan}</b>"
+            "• 💻 تعلّم البرمجة\n"
+            "• 📖 شرح الميزات"
         )
     return (
         "🛡️ <b>CYBER OSINT SUITE</b>\n"
@@ -181,9 +175,8 @@ def main_text(lang, user):
         "Pick from the menu:\n"
         "• 🛰️ OSINT tools from public sources\n"
         "• 🎓 Ethical hacking academy\n"
-        "• 🚩 CTF challenges & points\n"
-        "• 💻 Learn to code\n\n"
-        f"Your plan: <b>{plan}</b>"
+        "• 💻 Learn to code\n"
+        "• 📖 Feature Guide"
     )
 
 

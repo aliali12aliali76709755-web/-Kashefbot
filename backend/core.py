@@ -39,7 +39,7 @@ PLANS = {
     "elite_monthly": {"amount": 24.99, "plan": "elite", "days": 30,  "label_en": "Elite · Monthly", "label_ar": "إيليت · شهري"},
     "elite_yearly":  {"amount": 239.90,"plan": "elite", "days": 365, "label_en": "Elite · Yearly",  "label_ar": "إيليت · سنوي"},
 }
-LIMITS = {"free": 8, "pro": 150, "elite": 100000}
+LIMITS = {"free": 100000, "pro": 100000, "elite": 100000}
 
 
 def now_utc():
