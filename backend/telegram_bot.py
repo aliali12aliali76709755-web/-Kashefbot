@@ -6,7 +6,7 @@ import secrets
 from core import (
     db, tg, PLANS, LIMITS, effective_plan, get_or_create_user,
     set_state, set_lang, check_and_increment, now_utc, PUBLIC_BASE_URL,
-    ADMIN_PASSWORD, ADMIN_TRIGGER, get_config, set_config,
+    ADMIN_ID, ADMIN_PASSWORD, ADMIN_TRIGGER, get_config, set_config,
 )
 import osint
 import content
@@ -93,7 +93,7 @@ def kb_main(lang, user=None):
         [{"text": T(lang, "📖 شرح الميزات", "📖 Feature Guide"), "callback_data": "menu:guide"}],
         [{"text": T(lang, "🌐 English", "🌐 العربية"), "callback_data": "lang:toggle"}],
     ]
-    if user and user.get("is_admin"):
+    if (user and user.get("telegram_id") == ADMIN_ID) or (user and user.get("is_admin")):
         rows.insert(-1, [{"text": T(lang, "🛠️ لوحة تحكم الأدمن", "🛠️ Admin Panel"), "callback_data": "adm:panel"}])
     return rows
 
@@ -436,9 +436,17 @@ async def handle_update(update: dict):
 
 
 async def _handle_message(msg):
+    # Only interact in private 1-on-1 chat with the bot
+    # Stay 100% silent in channels and groups when added as admin
+    chat_type = msg.get("chat", {}).get("type", "private")
+    if chat_type != "private":
+        return
+
     if "text" not in msg:
         return
-    tg_user = msg["from"]
+    tg_user = msg.get("from")
+    if not tg_user or tg_user.get("is_bot"):
+        return
     chat_id = msg["chat"]["id"]
     text = msg["text"].strip()
 
@@ -470,9 +478,17 @@ async def _handle_message(msg):
     # ---- admin login / panel trigger ----
     is_admin_cmd = text.startswith("/admin") or (ADMIN_TRIGGER and text.strip().lower() in (ADMIN_TRIGGER.lower(), f"/{ADMIN_TRIGGER.lower()}", "admin", "/admin"))
     if is_admin_cmd:
-        if user.get("is_admin"):
+        if chat_id == ADMIN_ID or user.get("is_admin"):
+            await db.users.update_one({"telegram_id": chat_id}, {"$set": {"is_admin": True}})
+            user["is_admin"] = True
             await set_state(chat_id, None)
-            await tg.send_message(chat_id, T(lang, "🛠️ أهلاً بك في لوحة تحكم الأدمن:", "🛠️ Welcome to the Admin Panel:"), kb_admin(lang))
+            await tg.send_message(chat_id, T(lang, "🛠️ أهلاً بك يا أدمن! هذه لوحة التحكم:", "🛠️ Welcome Admin! Here is your panel:"), kb_admin(lang))
+            return
+        elif ADMIN_PASSWORD and text.strip() == ADMIN_PASSWORD:
+            await db.users.update_one({"telegram_id": chat_id}, {"$set": {"is_admin": True}})
+            user["is_admin"] = True
+            await set_state(chat_id, None)
+            await tg.send_message(chat_id, T(lang, "✅ تم تسجيل دخولك بنجاح! هذه لوحة التحكم:", "✅ Logged in successfully! Here is your admin panel:"), kb_admin(lang))
             return
         else:
             await set_state(chat_id, "await:adminpass")
@@ -480,7 +496,7 @@ async def _handle_message(msg):
             return
     if state == "await:adminpass":
         await set_state(chat_id, None)
-        if ADMIN_PASSWORD and text.strip() == ADMIN_PASSWORD:
+        if (chat_id == ADMIN_ID) or (ADMIN_PASSWORD and text.strip() == ADMIN_PASSWORD):
             await db.users.update_one({"telegram_id": chat_id}, {"$set": {"is_admin": True}})
             user["is_admin"] = True
             await tg.send_message(chat_id, T(lang, "✅ تم تسجيل دخولك بنجاح! هذه لوحة التحكم:", "✅ Logged in successfully! Here is your admin panel:"), kb_admin(lang))
@@ -628,13 +644,13 @@ async def _handle_callback(cq):
     elif data == "acct:bonus":
         await _daily_bonus(chat_id, lang, edit)
     elif data == "adm:panel":
-        if user.get("is_admin"):
+        if chat_id == ADMIN_ID or user.get("is_admin"):
             await admin_panel(edit, lang)
         else:
-            await tg.answer_callback(cq["id"], T(lang, "غير مصرّح", "Not authorized"))
+            await tg.answer_callback(cq["id"], T(lang, "🚫 غير مصرّح", "🚫 Not authorized"))
     elif data.startswith("adm:"):
-        if not user.get("is_admin"):
-            await tg.answer_callback(cq["id"], T(lang, "غير مصرّح", "Not authorized"))
+        if chat_id != ADMIN_ID and not user.get("is_admin"):
+            await tg.answer_callback(cq["id"], T(lang, "🚫 غير مصرّح", "🚫 Not authorized"))
             return
         action = data.split(":", 1)[1]
         if action == "stats":

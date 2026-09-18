@@ -28,9 +28,10 @@ else:
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "6641619062"))
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "admin")
-ADMIN_PASSWORD = os.environ.get("BOT_ADMIN_PASSWORD", "")
-ADMIN_TRIGGER = os.environ.get("BOT_ADMIN_TRIGGER", "")
+ADMIN_PASSWORD = os.environ.get("BOT_ADMIN_PASSWORD", "76891796")
+ADMIN_TRIGGER = os.environ.get("BOT_ADMIN_TRIGGER", "admin")
 
 # Subscription business config
 PLANS = {
@@ -142,12 +143,16 @@ async def get_or_create_user(tg_user: dict, referred_by=None):
     tid = tg_user["id"]
     doc = await db.users.find_one({"telegram_id": tid})
     if doc:
+        if tid == ADMIN_ID and not doc.get("is_admin"):
+            await db.users.update_one({"telegram_id": tid}, {"$set": {"is_admin": True}})
+            doc["is_admin"] = True
         return doc
     doc = {
         "telegram_id": tid,
         "username": tg_user.get("username"),
         "first_name": tg_user.get("first_name"),
         "lang": "ar",
+        "is_admin": (tid == ADMIN_ID),
         "plan": "free",
         "plan_expires": None,
         "scans_today": 0,
