@@ -95,10 +95,12 @@ class TelegramClient:
             return await self.send_message(chat_id, text, keyboard, disable_preview)
         return res
 
-    async def answer_callback(self, callback_id, text=None):
+    async def answer_callback(self, callback_id, text=None, show_alert=False):
         payload = {"callback_query_id": callback_id}
         if text:
             payload["text"] = text
+        if show_alert:
+            payload["show_alert"] = True
         return await self._call("answerCallbackQuery", payload)
 
     async def send_chat_action(self, chat_id, action="typing"):

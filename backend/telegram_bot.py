@@ -243,31 +243,77 @@ def kb_account(lang):
     ]
 
 
-# ---------- forced subscription gate ----------
-async def is_member(chat_id) -> bool:
+# ---------- multi-channel sequential forced subscription gate ----------
+async def get_forced_channels() -> list:
     cfg = await get_config()
-    ch = cfg.get("forced_channel")
-    if not ch:
-        return True
+    channels = cfg.get("forced_channels")
+    if isinstance(channels, list):
+        return [c for c in channels if c]
+    single = cfg.get("forced_channel")
+    if single:
+        return [single]
+    return []
+
+
+async def get_next_unjoined_channel(chat_id):
+    """Returns (channel_str, current_step, total_channels) or None if all are joined."""
     u = await db.users.find_one({"telegram_id": chat_id})
-    if u and u.get("is_admin"):
-        return True
-    res = await tg.get_chat_member(ch, chat_id)
-    if res.get("ok"):
-        return res["result"]["status"] not in ("left", "kicked")
-    return True  # fail-open if bot can't verify (not admin in channel)
+    if chat_id == ADMIN_ID or (u and u.get("is_admin")):
+        return None
+    channels = await get_forced_channels()
+    if not channels:
+        return None
+    for idx, ch in enumerate(channels, 1):
+        try:
+            res = await tg.get_chat_member(ch, chat_id)
+            if res.get("ok"):
+                status = res["result"]["status"]
+                if status in ("left", "kicked"):
+                    return (ch, idx, len(channels))
+            else:
+                # If bot is not admin or cannot verify, don't trap the user, continue checking others
+                continue
+        except Exception:
+            continue
+    return None
 
 
-async def send_join(chat_id, lang):
-    cfg = await get_config()
-    ch = (cfg.get("forced_channel") or "").lstrip("@")
-    link = f"https://t.me/{ch}"
-    text = T(lang,
-             f"🔒 <b>الاشتراك مطلوب</b>\n\nللاستمرار، اشترك أولاً بالقناة:\n👉 @{esc(ch)}\n\nبعد الاشتراك اضغط «✅ تحقّقت».",
-             f"🔒 <b>Subscription required</b>\n\nTo continue, join our channel first:\n👉 @{esc(ch)}\n\nAfter joining, tap “✅ I've joined”.")
-    kb = [[{"text": T(lang, "📢 اشترك بالقناة", "📢 Join channel"), "url": link}],
-          [{"text": T(lang, "✅ تحقّقت", "✅ I've joined"), "callback_data": "check:sub"}]]
-    await tg.send_message(chat_id, text, kb)
+async def is_member(chat_id) -> bool:
+    next_ch = await get_next_unjoined_channel(chat_id)
+    return next_ch is None
+
+
+async def send_join(chat_id, lang, next_ch=None, edit=None):
+    if not next_ch:
+        next_ch = await get_next_unjoined_channel(chat_id)
+    if not next_ch:
+        return
+    ch, step, total = next_ch
+    clean_ch = ch.lstrip("@")
+    if clean_ch.startswith("https://") or clean_ch.startswith("http://"):
+        link = clean_ch
+        display_name = clean_ch
+    else:
+        link = f"https://t.me/{clean_ch}"
+        display_name = f"@{clean_ch}"
+
+    if step > 1:
+        text = T(lang,
+                 f"🎉 <b>أحسنت!</b>\n\nيرجى الآن الاشتراك في القناة التالية [{step}/{total}]:\n👉 <b>{esc(display_name)}</b>\n\nاضغط على الزر أدناه للاشتراك ثم اضغط «✅ تحقّقت».",
+                 f"🎉 <b>Great job!</b>\n\nPlease now join the next channel [{step}/{total}]:\n👉 <b>{esc(display_name)}</b>\n\nTap to join then tap “✅ I've joined”.")
+    else:
+        text = T(lang,
+                 f"🔒 <b>الاشتراك الإجباري مطلوب</b>\n\nللاستمرار في استخدام البوت، اشترك في القناة [{step}/{total}]:\n👉 <b>{esc(display_name)}</b>\n\nبعد الاشتراك اضغط «✅ تحقّقت» للمتابعة.",
+                 f"🔒 <b>Subscription required</b>\n\nTo continue using the bot, join channel [{step}/{total}]:\n👉 <b>{esc(display_name)}</b>\n\nAfter joining, tap “✅ I've joined” to proceed.")
+
+    kb = [
+        [{"text": T(lang, f"📢 اشترك في {display_name}", f"📢 Join {display_name}"), "url": link}],
+        [{"text": T(lang, "✅ تحقّقت", "✅ I've joined"), "callback_data": "check:sub"}]
+    ]
+    if edit:
+        await edit(text, kb)
+    else:
+        await tg.send_message(chat_id, text, kb)
 
 
 # ---------- feature guide ----------
@@ -357,13 +403,50 @@ async def admin_panel(edit, lang):
             "• 📊 الإحصائيات: أرقام المستخدمين والاشتراكات والإيرادات.\n"
             "• 📢 البثّ: أرسل رسالة لكل المستخدمين دفعة واحدة.\n"
             "• ⬆️ ترقية مستخدم: فعّل باقة لأي مستخدم يدوياً.\n"
-            "• 🔒 الاشتراك الإجباري: أجبر المستخدمين على الاشتراك بقناتك.",
+            "• 🔒 الاشتراك الإجباري: إدارة قنوات ومجموعات الاشتراك الإجباري بالتتابع.",
             "🛠️ <b>Admin Panel</b>\n\nPick an action:\n"
             "• 📊 Statistics: users, subscriptions, revenue.\n"
             "• 📢 Broadcast: message all users at once.\n"
             "• ⬆️ Upgrade a user: manually grant a plan.\n"
-            "• 🔒 Forced subscription: require users to join your channel.")
+            "• 🔒 Forced subscription: manage sequential required channels/groups.")
     await edit(txt, kb_admin(lang))
+
+
+async def show_admin_sub_panel(edit, lang):
+    channels = await get_forced_channels()
+    if channels:
+        ch_list = "\n".join([f"{i}. <code>{esc(ch)}</code>" for i, ch in enumerate(channels, 1)])
+        text = T(lang,
+                 f"🔒 <b>إدارة قنوات ومجموعات الاشتراك الإجباري</b>\n\nالقنوات المضافة حالياً ({len(channels)}):\n{ch_list}\n\n<i>يطلب البوت من المستخدم الاشتراك فيها بالتتابع قناة تلو الأخرى حتى ينتهي منها جميعاً.</i>",
+                 f"🔒 <b>Manage Forced Subscription Channels/Groups</b>\n\nCurrent channels ({len(channels)}):\n{ch_list}\n\n<i>The bot asks users to join them sequentially one after another.</i>")
+        kb = [
+            [{"text": T(lang, "➕ إضافة قناة / مجموعة", "➕ Add channel/group"), "callback_data": "adm:sub_add"}],
+            [{"text": T(lang, "❌ حذف قناة معينة", "❌ Delete a channel"), "callback_data": "adm:sub_del"}],
+            [{"text": T(lang, "🗑️ مسح كل القنوات", "🗑️ Clear all channels"), "callback_data": "adm:sub_clear"}],
+            [{"text": T(lang, "⬅️ لوحة الأدمن", "⬅️ Admin Panel"), "callback_data": "adm:panel"}],
+        ]
+    else:
+        text = T(lang,
+                 "🔒 <b>إدارة قنوات الاشتراك الإجباري</b>\n\nلا توجد أي قنوات مضافة حالياً. البوت متاح للجميع بدون اشتراك إجباري.",
+                 "🔒 <b>Manage Forced Subscription Channels</b>\n\nNo channels added yet. The bot is currently open to all.")
+        kb = [
+            [{"text": T(lang, "➕ إضافة قناة / مجموعة", "➕ Add channel/group"), "callback_data": "adm:sub_add"}],
+            [{"text": T(lang, "⬅️ لوحة الأدمن", "⬅️ Admin Panel"), "callback_data": "adm:panel"}],
+        ]
+    await edit(text, kb)
+
+
+async def show_admin_sub_del_panel(edit, lang):
+    channels = await get_forced_channels()
+    if not channels:
+        await show_admin_sub_panel(edit, lang)
+        return
+    text = T(lang, "🗑️ اضغط على القناة التي تريد إزالتها من الاشتراك الإجباري:", "🗑️ Click on the channel you want to remove:")
+    kb = []
+    for idx, ch in enumerate(channels):
+        kb.append([{"text": f"❌ {ch}", "callback_data": f"adm:sub_rm:{idx}"}])
+    kb.append([{"text": T(lang, "⬅️ رجوع", "⬅️ Back"), "callback_data": "adm:sub"}])
+    await edit(text, kb)
 
 
 async def admin_stats_text(lang):
@@ -376,11 +459,11 @@ async def admin_stats_text(lang):
     all_u = await db.users.find({}, {"_id": 0}).to_list(5000)
     pro = sum(1 for u in all_u if effective_plan(u) == "pro")
     elite = sum(1 for u in all_u if effective_plan(u) == "elite")
-    cfg = await get_config()
-    ch = cfg.get("forced_channel") or T(lang, "غير مفعّل", "off")
+    channels = await get_forced_channels()
+    ch = ", ".join(channels) if channels else T(lang, "غير مفعّل", "off")
     return T(lang,
-        f"📊 <b>الإحصائيات</b>\n\n👥 المستخدمون: <b>{users}</b>\n💎 اشتراكات مدفوعة: <b>{paid}</b> (PRO {pro} · ELITE {elite})\n💰 الإيرادات: <b>${revenue}</b>\n🔍 عمليات الفحص: <b>{scans}</b>\n🚩 تحديات محلولة: <b>{solved}</b>\n🔒 قناة الاشتراك الإجباري: {esc(ch)}",
-        f"📊 <b>Statistics</b>\n\n👥 Users: <b>{users}</b>\n💎 Paid subs: <b>{paid}</b> (PRO {pro} · ELITE {elite})\n💰 Revenue: <b>${revenue}</b>\n🔍 Scans: <b>{scans}</b>\n🚩 Solved: <b>{solved}</b>\n🔒 Forced channel: {esc(ch)}")
+        f"📊 <b>الإحصائيات</b>\n\n👥 المستخدمون: <b>{users}</b>\n💎 اشتراكات مدفوعة: <b>{paid}</b> (PRO {pro} · ELITE {elite})\n💰 الإيرادات: <b>${revenue}</b>\n🔍 عمليات الفحص: <b>{scans}</b>\n🚩 تحديات محلولة: <b>{solved}</b>\n🔒 قنوات الاشتراك الإجباري ({len(channels)}): {esc(ch)}",
+        f"📊 <b>Statistics</b>\n\n👥 Users: <b>{users}</b>\n💎 Paid subs: <b>{paid}</b> (PRO {pro} · ELITE {elite})\n💰 Revenue: <b>${revenue}</b>\n🔍 Scans: <b>{scans}</b>\n🚩 Solved: <b>{solved}</b>\n🔒 Forced channels ({len(channels)}): {esc(ch)}")
 
 
 async def do_admin_broadcast(chat_id, lang, message):
@@ -511,14 +594,44 @@ async def _handle_message(msg):
         await set_state(chat_id, None)
         await do_admin_upgrade(chat_id, lang, text)
         return
-    if state == "await:adminsetchannel" and user.get("is_admin"):
+    if state == "await:adminaddchannel" and (chat_id == ADMIN_ID or user.get("is_admin")):
+        await set_state(chat_id, None)
+        raw = text.strip()
+        if "t.me/" in raw:
+            raw = raw.split("t.me/")[-1].split("/")[0].split("?")[0]
+        if not raw.startswith("@") and not raw.startswith("-100") and not raw.isdigit():
+            ch = "@" + raw
+        else:
+            ch = raw
+
+        channels = await get_forced_channels()
+        if ch not in channels:
+            channels.append(ch)
+            await set_config("forced_channels", channels)
+            await set_config("forced_channel", channels[0])
+            msg_ok = T(lang,
+                f"✅ تم إضافة القناة/المجموعة بنجاح:\n<b>{esc(ch)}</b>\n\nإجمالي القنوات المطلوبة الآن: <b>{len(channels)}</b>\n⚠️ تأكد من رفع البوت كمشرف (Admin) فيها حتى يتمكن من التحقق من اشتراك الأعضاء.",
+                f"✅ Channel/group added successfully:\n<b>{esc(ch)}</b>\n\nTotal forced channels: <b>{len(channels)}</b>\n⚠️ Make sure the bot is an Admin in it.")
+        else:
+            msg_ok = T(lang, f"ℹ️ القناة موجودة مسبقاً في القائمة:\n<b>{esc(ch)}</b>", f"ℹ️ Channel already exists in the list:\n<b>{esc(ch)}</b>")
+
+        await tg.send_message(chat_id, msg_ok, [
+            [{"text": T(lang, "➕ إضافة قناة أخرى", "➕ Add another"), "callback_data": "adm:sub_add"}],
+            [{"text": T(lang, "📋 عرض القنوات", "📋 View channels"), "callback_data": "adm:sub"}],
+            [{"text": T(lang, "⬅️ لوحة الأدمن", "⬅️ Admin Panel"), "callback_data": "adm:panel"}]
+        ])
+        return
+
+    if state == "await:adminsetchannel" and (chat_id == ADMIN_ID or user.get("is_admin")):
         await set_state(chat_id, None)
         ch = text.strip()
         if ch.lower() in ("off", "الغاء", "إلغاء", "-"):
+            await set_config("forced_channels", [])
             await set_config("forced_channel", None)
-            await tg.send_message(chat_id, T(lang, "✅ تم إيقاف الاشتراك الإجباري.", "✅ Forced subscription disabled."), kb_admin(lang))
+            await tg.send_message(chat_id, T(lang, "✅ تم إيقاف الاشتراك الإجباري ومسح جميع القنوات.", "✅ Forced subscription disabled."), kb_admin(lang))
         else:
             ch = "@" + ch.lstrip("@")
+            await set_config("forced_channels", [ch])
             await set_config("forced_channel", ch)
             await tg.send_message(chat_id, T(lang,
                 f"✅ تم تفعيل الاشتراك الإجباري على {ch}.\n⚠️ تأكد أن البوت أدمن في القناة حتى يتحقق من الاشتراك.",
@@ -600,18 +713,26 @@ async def _handle_callback(cq):
     await get_or_create_user(cq["from"])
     user = await db.users.find_one({"telegram_id": chat_id})
     lang = user.get("lang", "ar")
-    await tg.answer_callback(cq["id"])
-
     async def edit(text, kb):
         await tg.edit_message(chat_id, message_id, text, kb)
 
     if data == "check:sub":
-        if await is_member(chat_id):
+        next_ch = await get_next_unjoined_channel(chat_id)
+        if not next_ch:
+            await tg.answer_callback(cq["id"], T(lang, "✅ تم التحقق بنجاح! أهلاً بك.", "✅ Verified successfully! Welcome."))
             await set_state(chat_id, None)
             await edit(main_text(lang, user), kb_main(lang, user))
         else:
-            await send_join(chat_id, lang)
+            ch, step, total = next_ch
+            await tg.answer_callback(cq["id"], T(lang, f"⚠️ لم تشترك بعد في القناة [{step}/{total}]!\nاشترك أولاً ثم اضغط تحقّقت.", f"⚠️ Not joined channel [{step}/{total}] yet!\nPlease join first then verify."), show_alert=True)
+            try:
+                await send_join(chat_id, lang, next_ch=next_ch, edit=edit)
+            except Exception:
+                pass
         return
+
+    await tg.answer_callback(cq["id"])
+
     if not data.startswith("adm:") and not user.get("is_admin") and not await is_member(chat_id):
         await send_join(chat_id, lang)
         return
@@ -671,14 +792,30 @@ async def _handle_callback(cq):
                 [{"text": T(lang, "❌ إلغاء", "❌ Cancel"), "callback_data": "adm:panel"}]
             ])
         elif action == "sub":
-            cfg = await get_config()
-            cur = cfg.get("forced_channel") or T(lang, "غير مفعّل", "off")
-            await set_state(chat_id, "await:adminsetchannel")
+            await show_admin_sub_panel(edit, lang)
+        elif action == "sub_add":
+            await set_state(chat_id, "await:adminaddchannel")
             await edit(T(lang,
-                f"🔒 <b>الاشتراك الإجباري</b>\nالحالي: {esc(cur)}\n\nأرسل يوزر القناة (مثال: <code>@mychannel</code>) لتفعيله، أو أرسل <code>off</code> للإلغاء.\n⚠️ لازم يكون البوت أدمن في القناة.",
-                f"🔒 <b>Forced subscription</b>\nCurrent: {esc(cur)}\n\nSend the channel @username (e.g. <code>@mychannel</code>) to enable, or send <code>off</code> to disable.\n⚠️ The bot must be admin in that channel."), [
-                [{"text": T(lang, "❌ إلغاء", "❌ Cancel"), "callback_data": "adm:panel"}]
+                "➕ <b>إضافة قناة أو مجموعة للاشتراك الإجباري</b>\n\nأرسل معرّف القناة (مثال: <code>@channel</code>) أو رابط القناة/المجموعة.\n\n⚠️ <b>مهم جداً:</b> تأكد من رفع البوت كمشرف (Admin) في القناة/المجموعة حتى يتمكن من التحقق من اشتراك الأعضاء.",
+                "➕ <b>Add Channel or Group</b>\n\nSend channel @username (e.g. <code>@channel</code>) or link.\n\n⚠️ <b>Important:</b> Ensure the bot is an Admin in the channel/group to verify membership."), [
+                [{"text": T(lang, "❌ إلغاء", "❌ Cancel"), "callback_data": "adm:sub"}]
             ])
+        elif action == "sub_del":
+            await show_admin_sub_del_panel(edit, lang)
+        elif action == "sub_clear":
+            await set_config("forced_channels", [])
+            await set_config("forced_channel", None)
+            await show_admin_sub_panel(edit, lang)
+        elif action.startswith("sub_rm:"):
+            target = action.split(":", 1)[1]
+            channels = await get_forced_channels()
+            if target.isdigit() and int(target) < len(channels):
+                channels.pop(int(target))
+            elif target in channels:
+                channels.remove(target)
+            await set_config("forced_channels", channels)
+            await set_config("forced_channel", channels[0] if channels else None)
+            await show_admin_sub_panel(edit, lang)
     elif data == "tool:loc":
         await _start_loc(chat_id, lang, edit)
     elif data.startswith("tool:"):
