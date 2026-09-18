@@ -10,9 +10,9 @@ from motor.motor_asyncio import AsyncIOMotorClient
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
-MONGO_URL = os.environ["MONGO_URL"]
-DB_NAME = os.environ["DB_NAME"]
-client = AsyncIOMotorClient(MONGO_URL)
+MONGO_URL = os.environ.get("MONGO_URL", "mongodb://127.0.0.1:27017")
+DB_NAME = os.environ.get("DB_NAME", "osint_bot")
+client = AsyncIOMotorClient(MONGO_URL, serverSelectionTimeoutMS=2000)
 db = client[DB_NAME]
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
