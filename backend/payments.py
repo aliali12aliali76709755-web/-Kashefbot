@@ -112,7 +112,7 @@ async def bot_checkout(package_id: str, telegram_id) -> str:
     cfg = PLANS.get(package_id)
     if not cfg:
         raise ValueError("bad package")
-    origin = PUBLIC_BASE_URL
+    origin = PUBLIC_BASE_URL or "https://kashef-bot.onrender.com"
     checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=f"{origin}/api/webhook/stripe")
     req = CheckoutSessionRequest(
         amount=float(cfg["amount"]),

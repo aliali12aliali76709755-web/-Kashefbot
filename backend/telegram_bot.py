@@ -449,20 +449,21 @@ async def _handle_message(msg):
     chat_id = msg["chat"]["id"]
     text = msg["text"].strip()
 
-    # Automatically remove residual reply keyboards from previous bot runs/sessions
-    try:
-        sent = await tg._call("sendMessage", {
-            "chat_id": chat_id,
-            "text": "⚡",
-            "reply_markup": {"remove_keyboard": True}
-        })
-        if sent.get("ok"):
-            await tg._call("deleteMessage", {
+    # Automatically remove residual reply keyboards from previous bot runs/sessions on /start
+    if text.startswith("/start"):
+        try:
+            sent = await tg._call("sendMessage", {
                 "chat_id": chat_id,
-                "message_id": sent["result"]["message_id"]
+                "text": "⚡",
+                "reply_markup": {"remove_keyboard": True}
             })
-    except Exception:
-        pass
+            if sent.get("ok"):
+                await tg._call("deleteMessage", {
+                    "chat_id": chat_id,
+                    "message_id": sent["result"]["message_id"]
+                })
+        except Exception:
+            pass
 
     referred_by = None
     if text.startswith("/start"):
@@ -473,16 +474,23 @@ async def _handle_message(msg):
     lang = user.get("lang", "ar")
     state = user.get("state") or ""
 
-    # ---- admin login trigger ----
-    if ADMIN_TRIGGER and text.strip() == ADMIN_TRIGGER:
-        await set_state(chat_id, "await:adminpass")
-        await tg.send_message(chat_id, T(lang, "🔐 أدخل كلمة سر لوحة التحكم:", "🔐 Enter the admin password:"))
-        return
+    # ---- admin login / panel trigger ----
+    is_admin_cmd = text.startswith("/admin") or (ADMIN_TRIGGER and text.strip().lower() in (ADMIN_TRIGGER.lower(), f"/{ADMIN_TRIGGER.lower()}", "admin", "/admin"))
+    if is_admin_cmd:
+        if user.get("is_admin"):
+            await set_state(chat_id, None)
+            await tg.send_message(chat_id, T(lang, "🛠️ أهلاً بك في لوحة تحكم الأدمن:", "🛠️ Welcome to the Admin Panel:"), kb_admin(lang))
+            return
+        else:
+            await set_state(chat_id, "await:adminpass")
+            await tg.send_message(chat_id, T(lang, "🔐 أدخل كلمة سر لوحة التحكم:", "🔐 Enter the admin password:"))
+            return
     if state == "await:adminpass":
         await set_state(chat_id, None)
         if ADMIN_PASSWORD and text.strip() == ADMIN_PASSWORD:
             await db.users.update_one({"telegram_id": chat_id}, {"$set": {"is_admin": True}})
-            await tg.send_message(chat_id, T(lang, "✅ أهلاً أيها الأدمن! هذه لوحة التحكم:", "✅ Welcome, admin! Here is your panel:"), kb_admin(lang))
+            user["is_admin"] = True
+            await tg.send_message(chat_id, T(lang, "✅ تم تسجيل دخولك بنجاح! هذه لوحة التحكم:", "✅ Logged in successfully! Here is your admin panel:"), kb_admin(lang))
         else:
             await tg.send_message(chat_id, T(lang, "❌ كلمة سر خاطئة. لا يمكنك الدخول.", "❌ Wrong password. Access denied."))
         return
@@ -637,22 +645,31 @@ async def _handle_callback(cq):
             return
         action = data.split(":", 1)[1]
         if action == "stats":
-            await edit(await admin_stats_text(lang), kb_admin(lang))
+            await edit(await admin_stats_text(lang), [
+                [{"text": T(lang, "🔄 تحديث الإحصائيات", "🔄 Refresh Stats"), "callback_data": "adm:stats"}],
+                [{"text": T(lang, "⬅️ لوحة الأدمن", "⬅️ Admin Panel"), "callback_data": "adm:panel"}],
+            ])
         elif action == "broadcast":
             await set_state(chat_id, "await:adminbroadcast")
-            await edit(T(lang, "📢 أرسل نص الرسالة التي تريد بثّها لكل المستخدمين:", "📢 Send the message text to broadcast to all users:"), kb_admin(lang))
+            await edit(T(lang, "📢 أرسل نص الرسالة التي تريد بثّها لكل المستخدمين:", "📢 Send the message text to broadcast to all users:"), [
+                [{"text": T(lang, "❌ إلغاء", "❌ Cancel"), "callback_data": "adm:panel"}]
+            ])
         elif action == "upgrade":
             await set_state(chat_id, "await:adminupgrade")
             await edit(T(lang,
                 "⬆️ أرسل: <code>المعرّف الباقة [الأيام]</code>\nمثال: <code>123456789 pro 30</code>\nأو بيوزر: <code>@username elite 365</code>",
-                "⬆️ Send: <code>id plan [days]</code>\ne.g. <code>123456789 pro 30</code>\nor by username: <code>@username elite 365</code>"), kb_admin(lang))
+                "⬆️ Send: <code>id plan [days]</code>\ne.g. <code>123456789 pro 30</code>\nor by username: <code>@username elite 365</code>"), [
+                [{"text": T(lang, "❌ إلغاء", "❌ Cancel"), "callback_data": "adm:panel"}]
+            ])
         elif action == "sub":
             cfg = await get_config()
             cur = cfg.get("forced_channel") or T(lang, "غير مفعّل", "off")
             await set_state(chat_id, "await:adminsetchannel")
             await edit(T(lang,
                 f"🔒 <b>الاشتراك الإجباري</b>\nالحالي: {esc(cur)}\n\nأرسل يوزر القناة (مثال: <code>@mychannel</code>) لتفعيله، أو أرسل <code>off</code> للإلغاء.\n⚠️ لازم يكون البوت أدمن في القناة.",
-                f"🔒 <b>Forced subscription</b>\nCurrent: {esc(cur)}\n\nSend the channel @username (e.g. <code>@mychannel</code>) to enable, or send <code>off</code> to disable.\n⚠️ The bot must be admin in that channel."), kb_admin(lang))
+                f"🔒 <b>Forced subscription</b>\nCurrent: {esc(cur)}\n\nSend the channel @username (e.g. <code>@mychannel</code>) to enable, or send <code>off</code> to disable.\n⚠️ The bot must be admin in that channel."), [
+                [{"text": T(lang, "❌ إلغاء", "❌ Cancel"), "callback_data": "adm:panel"}]
+            ])
     elif data == "tool:loc":
         await _start_loc(chat_id, lang, edit)
     elif data.startswith("tool:"):
