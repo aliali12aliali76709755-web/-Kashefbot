@@ -449,6 +449,21 @@ async def _handle_message(msg):
     chat_id = msg["chat"]["id"]
     text = msg["text"].strip()
 
+    # Automatically remove residual reply keyboards from previous bot runs/sessions
+    try:
+        sent = await tg._call("sendMessage", {
+            "chat_id": chat_id,
+            "text": "⚡",
+            "reply_markup": {"remove_keyboard": True}
+        })
+        if sent.get("ok"):
+            await tg._call("deleteMessage", {
+                "chat_id": chat_id,
+                "message_id": sent["result"]["message_id"]
+            })
+    except Exception:
+        pass
+
     referred_by = None
     if text.startswith("/start"):
         parts = text.split(maxsplit=1)
