@@ -173,6 +173,18 @@ app.add_middleware(
 )
 
 
+async def _keep_alive_loop():
+    import httpx
+    while True:
+        await asyncio.sleep(480)  # Ping every 8 minutes to keep Render free tier awake 24/7
+        if PUBLIC_BASE_URL:
+            try:
+                async with httpx.AsyncClient(timeout=20.0) as client:
+                    await client.get(f"{PUBLIC_BASE_URL}/api/")
+            except Exception as ex:
+                logger.debug("keep-alive self ping error: %s", ex)
+
+
 @app.on_event("startup")
 async def on_startup():
     if not tg.enabled:
@@ -187,6 +199,8 @@ async def on_startup():
             hook = f"{PUBLIC_BASE_URL}/api/telegram/webhook/{TELEGRAM_WEBHOOK_SECRET}"
             res = await tg.set_webhook(hook)
             logger.info("setWebhook -> %s (%s)", hook, res)
+        # Start keep-alive loop to prevent cold sleep
+        asyncio.create_task(_keep_alive_loop())
     except Exception as ex:
         logger.warning("startup telegram init failed: %s", ex)
 
