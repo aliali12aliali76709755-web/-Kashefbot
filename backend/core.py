@@ -29,6 +29,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "6641619062"))
+SUPPORT_ID = int(os.environ.get("SUPPORT_ID", "6641619062"))
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "admin")
 ADMIN_PASSWORD = os.environ.get("BOT_ADMIN_PASSWORD", "76891796")
 ADMIN_TRIGGER = os.environ.get("BOT_ADMIN_TRIGGER", "admin")
@@ -109,6 +110,9 @@ class TelegramClient:
     async def set_webhook(self, url, secret_token=None):
         payload = {"url": url, "allowed_updates": ["message", "callback_query"]}
         return await self._call("setWebhook", payload)
+
+    async def set_my_commands(self, commands):
+        return await self._call("setMyCommands", {"commands": commands})
 
     async def get_me(self):
         return await self._call("getMe", {})

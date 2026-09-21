@@ -6,7 +6,7 @@ import secrets
 from core import (
     db, tg, PLANS, LIMITS, effective_plan, get_or_create_user,
     set_state, set_lang, check_and_increment, now_utc, PUBLIC_BASE_URL,
-    ADMIN_ID, ADMIN_PASSWORD, ADMIN_TRIGGER, get_config, set_config,
+    ADMIN_ID, SUPPORT_ID, ADMIN_PASSWORD, ADMIN_TRIGGER, get_config, set_config,
 )
 import osint
 import content
@@ -91,10 +91,11 @@ def kb_main(lang, user=None):
         [{"text": T(lang, "🎓 أكاديمية الاختراق الأخلاقي", "🎓 Ethical Hacking Academy"), "callback_data": "menu:academy"}],
         [{"text": T(lang, "💻 تعلّم البرمجة", "💻 Learn to Code"), "callback_data": "menu:courses"}],
         [{"text": T(lang, "📖 شرح الميزات", "📖 Feature Guide"), "callback_data": "menu:guide"}],
+        [{"text": T(lang, "💬 الدعم الفني", "💬 Technical Support"), "callback_data": "menu:support"}],
         [{"text": T(lang, "🌐 English", "🌐 العربية"), "callback_data": "lang:toggle"}],
     ]
     if (user and user.get("telegram_id") == ADMIN_ID) or (user and user.get("is_admin")):
-        rows.insert(-1, [{"text": T(lang, "🛠️ لوحة تحكم الأدمن", "🛠️ Admin Panel"), "callback_data": "adm:panel"}])
+        rows.insert(-2, [{"text": T(lang, "🛠️ لوحة تحكم الأدمن", "🛠️ Admin Panel"), "callback_data": "adm:panel"}])
     return rows
 
 
@@ -163,21 +164,46 @@ def main_text(lang, user=None):
         return (
             "🛡️ <b>CYBER OSINT SUITE</b>\n"
             "<i>منصّتك الاحترافية للأمن السيبراني وجمع المعلومات القانوني</i>\n\n"
-            "اختر من القائمة:\n"
+            "اختر من القائمة أدناه للبدء:\n"
             "• 🛰️ أدوات OSINT من مصادر عامة\n"
             "• 🎓 أكاديمية اختراق أخلاقي\n"
             "• 💻 تعلّم البرمجة\n"
-            "• 📖 شرح الميزات"
+            "• 📖 شرح الميزات\n"
+            "• 💬 الدعم الفني"
         )
     return (
         "🛡️ <b>CYBER OSINT SUITE</b>\n"
         "<i>Your professional legal cybersecurity & OSINT platform</i>\n\n"
-        "Pick from the menu:\n"
+        "Pick from the menu to start:\n"
         "• 🛰️ OSINT tools from public sources\n"
         "• 🎓 Ethical hacking academy\n"
         "• 💻 Learn to code\n"
-        "• 📖 Feature Guide"
+        "• 📖 Feature Guide\n"
+        "• 💬 Technical Support"
     )
+
+
+def support_text(lang):
+    if lang == "ar":
+        return (
+            "💬 <b>قسم الدعم الفني والمساعدة</b>\n\n"
+            "إذا واجهتك أي مشكلة أو كان لديك استفسار أو اقتراح، يمكنك التواصل مع مسؤول الدعم الفني مباشرة:\n\n"
+            f"👤 <b>معرّف الدعم (ID):</b> <code>{SUPPORT_ID}</code>\n\n"
+            "اضغط على الزر أدناه لفتح المحادثة ومراسلة الدعم فوراً 👇"
+        )
+    return (
+        "💬 <b>Technical Support & Help</b>\n\n"
+        "If you encounter any issue, inquiry or suggestion, contact technical support directly:\n\n"
+        f"👤 <b>Support ID:</b> <code>{SUPPORT_ID}</code>\n\n"
+        "Tap the button below to message support directly 👇"
+    )
+
+
+def kb_support(lang):
+    return [
+        [{"text": T(lang, "💬 مراسلة الدعم الفني", "💬 Contact Support"), "url": f"tg://user?id={SUPPORT_ID}"}],
+        [{"text": T(lang, "⬅️ رجوع", "⬅️ Back"), "callback_data": "menu:main"}],
+    ]
 
 
 def osint_text(lang):
@@ -650,10 +676,14 @@ async def _handle_message(msg):
             return
         await tg.send_message(chat_id, main_text(lang, user), kb_main(lang, user))
         return
+    if text.startswith("/support") or text.strip().lower() in ("دعم", "الدعم", "الدعم الفني", "support", "/support"):
+        await set_state(chat_id, None)
+        await tg.send_message(chat_id, support_text(lang), kb_support(lang))
+        return
     if text.startswith("/help"):
         await tg.send_message(chat_id, T(lang,
-            "الأوامر:\n/start القائمة\n/menu القائمة\n/me حسابي\n/lang تغيير اللغة",
-            "Commands:\n/start menu\n/menu menu\n/me account\n/lang change language"), kb_main(lang, user))
+            "📌 <b>الأوامر المتاحة:</b>\n/start - بدء تشغيل البوت وفتح القائمة الرئيسية\n/menu - القائمة الرئيسية\n/support - الدعم الفني والمساعدة\n/lang - تغيير اللغة",
+            "📌 <b>Available Commands:</b>\n/start - Start bot & open main menu\n/menu - Main menu\n/support - Technical Support\n/lang - Change language"), kb_main(lang, user))
         return
     if text.startswith("/me"):
         await tg.send_message(chat_id, await account_text(lang, chat_id), kb_account(lang))
@@ -759,6 +789,8 @@ async def _handle_callback(cq):
         await edit(upgrade_text(lang), kb_upgrade(lang))
     elif data == "menu:guide":
         await edit(T(lang, "📖 <b>دليل الميزات</b>\nاختر قسماً لتعرف كل ميزة وكيف تستخدمها:", "📖 <b>Feature Guide</b>\nPick a section to learn each feature and how to use it:"), kb_guide(lang))
+    elif data == "menu:support":
+        await edit(support_text(lang), kb_support(lang))
     elif data.startswith("guide:"):
         sec = data.split(":", 1)[1]
         await edit(guide_text(lang, sec), kb_back(lang, "menu:guide"))

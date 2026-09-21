@@ -199,6 +199,18 @@ async def on_startup():
             hook = f"{PUBLIC_BASE_URL}/api/telegram/webhook/{TELEGRAM_WEBHOOK_SECRET}"
             res = await tg.set_webhook(hook)
             logger.info("setWebhook -> %s (%s)", hook, res)
+        # Register bot commands menu in Telegram
+        try:
+            await tg.set_my_commands([
+                {"command": "start", "description": "🚀 بدء تشغيل البوت / Start Bot"},
+                {"command": "menu", "description": "📋 القائمة الرئيسية / Main Menu"},
+                {"command": "support", "description": "💬 الدعم الفني / Support"},
+                {"command": "help", "description": "📖 المساعدة والأوامر / Help"},
+                {"command": "lang", "description": "🌐 تغيير اللغة / Change Language"},
+            ])
+            logger.info("Telegram commands registered successfully.")
+        except Exception as cex:
+            logger.warning("set_my_commands failed: %s", cex)
         # Start keep-alive loop to prevent cold sleep
         asyncio.create_task(_keep_alive_loop())
     except Exception as ex:
