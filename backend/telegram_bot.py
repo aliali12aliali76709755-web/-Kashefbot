@@ -11,6 +11,7 @@ from core import (
 import osint
 import content
 import payments
+import academy_files
 
 BOT_USERNAME = None  # filled on startup
 
@@ -24,63 +25,134 @@ def T(lang, ar, en):
     return ar if lang == "ar" else en
 
 
-async def telegram_public_info(username: str, lang="ar") -> str:
-    u = username.strip().lstrip("@").split("/")[-1]
-    if not re.match(r"^[A-Za-z0-9_]{4,32}$", u):
-        return T(lang, "❌ اسم مستخدم غير صالح. أرسل يوزر عام مثل <code>@durov</code>.",
-                 "❌ Invalid username. Send a public @username like <code>@durov</code>.")
-    res = await tg.get_chat("@" + u)
-    if not res.get("ok"):
+async def telegram_public_info(target: str, lang="ar") -> str:
+    raw = target.strip()
+    clean_id = raw.lstrip("-")
+    
+    # 1) If user sends a numeric ID (User ID or Channel/Group ID like -100...)
+    if clean_id.isdigit():
+        chat_id_num = int(raw)
+        u_db = await db.users.find_one({"telegram_id": chat_id_num})
+        res = await tg.get_chat(chat_id_num)
+        
+        if res.get("ok"):
+            c = res["result"]
+            ctype = c.get("type", "user")
+            name = c.get("title") or (" ".join(filter(None, [c.get("first_name"), c.get("last_name")]))) or (u_db.get("first_name") if u_db else "—")
+            username = c.get("username") or (u_db.get("username") if u_db else None)
+            bio = c.get("bio") or c.get("description")
+            cid = c.get("id", chat_id_num)
+        elif u_db:
+            ctype = "user"
+            name = u_db.get("first_name") or "—"
+            username = u_db.get("username")
+            bio = None
+            cid = chat_id_num
+        else:
+            return T(lang,
+                f"❌ لم يتم العثور على معلومات للآيدي <code>{esc(raw)}</code>.\n\n💡 <i>ملاحظة: لكي يتعرف البوت على المستخدم من الآيدي، يجب أن يكون المستخدم قد تواصل مع البوت مسبقاً، أو أن يكون الآيدي لقناة أو مجموعة أو بوت عام.</i>",
+                f"❌ No information found for ID <code>{esc(raw)}</code>.\n\n💡 <i>Note: The user must have started the bot, or the ID must belong to a public channel/group/bot.</i>")
+        
+        type_map = {"channel": T(lang, "قناة", "Channel"), "supergroup": T(lang, "مجموعة عملاقة", "Supergroup"),
+                    "group": T(lang, "مجموعة", "Group"), "private": T(lang, "حساب مستخدم شخصي", "Personal User"),
+                    "bot": T(lang, "بوت", "Bot"), "user": T(lang, "حساب مستخدم", "User")}
+        
+        count = None
+        if ctype in ("channel", "group", "supergroup"):
+            cc = await tg.get_chat_member_count(chat_id_num)
+            if cc.get("ok"):
+                count = cc["result"]
+
+        title = T(lang, "🔎 <b>كاشف تليجرام — التعرف عبر الآيدي (ID Lookup)</b>", "🔎 <b>Telegram Intelligence — ID Lookup</b>")
+        lines = [
+            title, "",
+            f"🆔 {T(lang, 'الآيدي الرقمي (ID)', 'Telegram ID')}: <code>{esc(cid)}</code>",
+            f"👤 {T(lang, 'الاسم / العنوان', 'Name / Title')}: <b>{esc(name)}</b>",
+            f"🏷️ {T(lang, 'نوع الحساب', 'Account Type')}: <b>{type_map.get(ctype, esc(ctype))}</b>"
+        ]
+        if username:
+            lines.append(f"🔗 {T(lang, 'اليوزر المعرّف', 'Username')}: @{esc(username)}")
+            lines.append(f"🌐 {T(lang, 'رابط الحساب', 'Profile Link')}: https://t.me/{esc(username)}")
+        else:
+            lines.append(f"🔗 {T(lang, 'اليوزر المعرّف', 'Username')}: <i>{T(lang, 'لا يوجد يوزر عام (حساب برقم فقط)', 'No public username')}</i>")
+            lines.append(f"💬 {T(lang, 'رابط المراسلة المباشر', 'Direct Chat Link')}: tg://user?id={esc(cid)}")
+        if count is not None:
+            lines.append(f"👥 {T(lang, 'عدد الأعضاء', 'Members')}: <code>{count:,}</code>")
+        if bio:
+            lines.append(f"\n📝 {T(lang, 'الوصف / النبذة', 'Bio / Description')}:\n<i>{esc(bio[:400])}</i>")
+        return "\n".join(lines)
+
+    # 2) If user sends a username or t.me link
+    u = raw.lstrip("@").split("/")[-1].split("?")[0]
+    if not re.match(r"^[A-Za-z0-9_]{3,32}$", u):
         return T(lang,
-                 "❌ لم أجد قناة/مجموعة/بوت عام بهذا الاسم.\n\n<i>ملاحظة: بيانات الحسابات الشخصية الخاصة (الرقم، الموقع) لا يمكن كشفها — هذا حماية للخصوصية وقانوني.</i>",
-                 "❌ No public channel/group/bot found.\n\n<i>Note: private personal account data (phone, location) cannot be revealed — that's privacy protection and the law.</i>")
-    c = res["result"]
-    ctype = c.get("type", "")
-    name = c.get("title") or (" ".join(filter(None, [c.get("first_name"), c.get("last_name")]))) or "—"
+            "❌ صيغة غير صالحة. أرسل يوزر عام مثل <code>@durov</code> أو آيدي رقمي مثل <code>6641619062</code>.",
+            "❌ Invalid format. Send a public @username like <code>@durov</code> or a numeric ID like <code>6641619062</code>.")
+    
+    res = await tg.get_chat("@" + u)
+    u_db = await db.users.find_one({"username": {"$regex": f"^{re.escape(u)}$", "$options": "i"}})
+    
+    if not res.get("ok") and not u_db:
+        return T(lang,
+            f"❌ لم أجد حساباً أو قناة أو بوتاً عاماً باليوزر <code>@{esc(u)}</code>.\nتأكد من كتابة اليوزر بشكل صحيح.",
+            f"❌ No public account/channel/bot found for <code>@{esc(u)}</code>.\nMake sure the username is correct.")
+    
+    c = res.get("result", {}) if res.get("ok") else {}
+    ctype = c.get("type") or "user"
+    cid = c.get("id") or (u_db.get("telegram_id") if u_db else "—")
+    name = c.get("title") or (" ".join(filter(None, [c.get("first_name"), c.get("last_name")]))) or (u_db.get("first_name") if u_db else "—")
+    
     count = None
     if ctype in ("channel", "group", "supergroup"):
         cc = await tg.get_chat_member_count("@" + u)
         if cc.get("ok"):
             count = cc["result"]
+
     type_map = {"channel": T(lang, "قناة", "Channel"), "supergroup": T(lang, "مجموعة عملاقة", "Supergroup"),
-                "group": T(lang, "مجموعة", "Group"), "private": T(lang, "حساب/بوت", "Account/Bot"),
-                "bot": T(lang, "بوت", "Bot")}
-    title = T(lang, "🔎 <b>معلومات كيان تليجرام العام</b>", "🔎 <b>Public Telegram Entity Info</b>")
-    lines = [title, "",
-             f"{T(lang,'الاسم','Name')}: <b>{esc(name)}</b>",
-             f"{T(lang,'المعرّف','Username')}: <code>@{esc(u)}</code>",
-             f"{T(lang,'النوع','Type')}: {type_map.get(ctype, esc(ctype))}",
-             f"{T(lang,'الرقم التعريفي','ID')}: <code>{esc(c.get('id'))}</code>"]
+                "group": T(lang, "مجموعة", "Group"), "private": T(lang, "حساب مستخدم شخصي", "Personal User"),
+                "bot": T(lang, "بوت", "Bot"), "user": T(lang, "حساب مستخدم", "User")}
+    
+    title = T(lang, "🔎 <b>كاشف تليجرام — استخراج الآيدي الأصلي من اليوزر</b>", "🔎 <b>Telegram Intelligence — Extract ID from Username</b>")
+    lines = [
+        title, "",
+        f"🆔 <b>{T(lang, 'الآيدي الأصلي (ID)', 'Original Telegram ID')}:</b> <code>{esc(cid)}</code>",
+        f"👤 {T(lang, 'الاسم / العنوان', 'Name / Title')}: <b>{esc(name)}</b>",
+        f"🔗 {T(lang, 'المعرّف', 'Username')}: <code>@{esc(u)}</code>",
+        f"🏷️ {T(lang, 'النوع', 'Type')}: <b>{type_map.get(ctype, esc(ctype))}</b>",
+        f"🌐 {T(lang, 'الرابط المباشر', 'Link')}: https://t.me/{esc(u)}"
+    ]
     if count is not None:
-        lines.append(f"{T(lang,'عدد الأعضاء','Members')}: <code>{count:,}</code>")
+        lines.append(f"👥 {T(lang, 'عدد الأعضاء', 'Members')}: <code>{count:,}</code>")
     bio = c.get("description") or c.get("bio")
     if bio:
-        lines.append(f"\n{T(lang,'الوصف','Description')}:\n{esc(bio[:400])}")
-    if c.get("has_private_forwards") is not None or ctype == "private":
-        lines.append("\n<i>" + T(lang, "الحسابات الشخصية تُظهر فقط ما يجعله المستخدم عاماً.",
-                                  "Personal accounts show only what the user makes public.") + "</i>")
+        lines.append(f"\n📝 {T(lang, 'الوصف / النبذة', 'Bio / Description')}:\n<i>{esc(bio[:400])}</i>")
     return "\n".join(lines)
 
 
 # ---------- tool registry ----------
 # key -> (function, ar_prompt, en_prompt, counts_against_limit)
 TOOLS = {
-    "ip":       (osint.ip_lookup,      "🌐 أرسل عنوان IP (مثال: 8.8.8.8)", "🌐 Send an IP address (e.g. 8.8.8.8)", True),
-    "phone":    (osint.phone_lookup,   "📞 أرسل رقم الهاتف مع رمز الدولة (+9647...)", "📞 Send a phone number with country code (+1...)", True),
-    "domain":   (osint.domain_whois,   "🔎 أرسل اسم النطاق (مثال: google.com)", "🔎 Send a domain name (e.g. google.com)", True),
-    "dns":      (osint.dns_lookup,     "🧭 أرسل اسم النطاق لجلب سجلات DNS", "🧭 Send a domain to fetch DNS records", True),
-    "email":    (osint.email_breach,   "📧 أرسل البريد الإلكتروني لفحص التسريبات", "📧 Send an email to check for breaches", True),
-    "pwd":      (osint.password_pwned,  "🔑 أرسل كلمة المرور للتحقق إن كانت مسرّبة (لا نخزّنها)", "🔑 Send a password to check if it's pwned (we never store it)", True),
-    "user":     (osint.username_search, "🕵️ أرسل اسم المستخدم للبحث عبر المنصات", "🕵️ Send a username to search across platforms", True),
-    "url":      (osint.url_analyze,     "🔗 أرسل الرابط لتحليله", "🔗 Send a URL to analyze", True),
-    "urlmal":   (osint.url_malware_scan, "🛡️ أرسل الرابط لفحص إن كان خبيثاً/احتيالياً", "🛡️ Send a URL to scan for malicious/phishing", True),
-    "emailval": (osint.email_validate,  "✅ أرسل البريد للتحقق من صحته", "✅ Send an email to verify", True),
-    "teleinfo": (telegram_public_info,  "🔎 أرسل يوزر قناة/بوت عام (مثال: @telegram)", "🔎 Send a public channel/bot @username (e.g. @telegram)", True),
-    "dorks":    (osint.google_dorks,    "🧰 أرسل نطاقاً لتوليد استعلامات Google Dorks", "🧰 Send a domain to generate Google Dorks", True),
-    "hashgen":  (osint.hash_generate,   "🔐 أرسل نصاً لتوليد بصماته", "🔐 Send text to generate hashes", False),
-    "hashid":   (osint.hash_identify,   "🧩 أرسل البصمة لتحديد نوعها", "🧩 Send a hash to identify its type", False),
-    "b64":      (osint.base64_tool,     "🔁 أرسل نصاً للترميز/فك الترميز Base64", "🔁 Send text to Base64 encode/decode", False),
-    "genpass":  (osint.password_generator, "🔑 أرسل الطول المطلوب (8-64) أو أرسل أي شيء لطول 16", "🔑 Send desired length (8-64) or anything for length 16", False),
+    "ip":       (osint.ip_lookup,           "🌐 أرسل عنوان IP (مثال: 8.8.8.8)", "🌐 Send an IP address (e.g. 8.8.8.8)", True),
+    "phone":    (osint.phone_lookup,        "📞 أرسل رقم الهاتف مع رمز الدولة (+9647...)", "📞 Send a phone number with country code (+1...)", True),
+    "domain":   (osint.domain_whois,        "🔎 أرسل اسم النطاق (مثال: google.com)", "🔎 Send a domain name (e.g. google.com)", True),
+    "dns":      (osint.dns_lookup,          "🧭 أرسل اسم النطاق لجلب سجلات DNS", "🧭 Send a domain to fetch DNS records", True),
+    "email":    (osint.email_breach,        "📧 أرسل البريد الإلكتروني لفحص التسريبات", "📧 Send an email to check for breaches", True),
+    "pwd":      (osint.password_pwned,       "🔑 أرسل كلمة المرور للتحقق إن كانت مسرّبة (لا نخزّنها)", "🔑 Send a password to check if it's pwned (we never store it)", True),
+    "user":     (osint.username_search,     "🕵️ أرسل اسم المستخدم للبحث عبر المنصات", "🕵️ Send a username to search across platforms", True),
+    "url":      (osint.url_analyze,          "🔗 أرسل الرابط لتحليله", "🔗 Send a URL to analyze", True),
+    "urlmal":   (osint.url_malware_scan,    "🛡️ أرسل الرابط لفحص إن كان خبيثاً/احتيالياً", "🛡️ Send a URL to scan for malicious/phishing", True),
+    "emailval": (osint.email_validate,       "✅ أرسل البريد للتحقق من صحته", "✅ Send an email to verify", True),
+    "teleinfo": (telegram_public_info,      "🔎 أرسل يوزر حساب/قناة/بوت (مثال: @durov) أو أرسل الآيدي الرقمي (مثال: 6641619062)", "🔎 Send a Telegram @username (e.g. @durov) or numeric ID (e.g. 6641619062)", True),
+    "subdomain":(osint.subdomain_scanner,   "🌐 أرسل النطاق (مثال: example.com) لاكتشاف النطاقات الفرعية عبر سجلات SSL", "🌐 Send a domain (e.g. example.com) to discover subdomains via SSL logs", True),
+    "github":   (osint.github_user_osint,   "🐙 أرسل اسم مستخدم GitHub (مثال: torvalds) لاستخراج ملفه الاستخباراتي الكامل", "🐙 Send a GitHub username (e.g. torvalds) for full OSINT intelligence", True),
+    "mac":      (osint.mac_lookup,          "📟 أرسل عنوان MAC (مثال: 00:1A:2B:3C:4D:5E) للتعرف على الشركة المصنعة", "📟 Send a MAC address (e.g. 00:1A:2B:3C:4D:5E) to identify vendor", False),
+    "headers":  (osint.security_headers_scan,"🛡️ أرسل رابط أو نطاق الموقع لفحص رؤوس الحماية والتقنيات (مثال: google.com)", "🛡️ Send a website URL/domain to inspect security headers and tech stack", True),
+    "ports":    (osint.fast_port_scan,      "🔌 أرسل IP أو نطاق لفحص المنافذ القياسية المفتوحة (مثال: scanme.nmap.org)", "🔌 Send an IP or domain to scan open common ports", True),
+    "dorks":    (osint.google_dorks,        "🧰 أرسل نطاقاً لتوليد استعلامات Google Dorks", "🧰 Send a domain to generate Google Dorks", True),
+    "hashgen":  (osint.hash_generate,       "🔐 أرسل نصاً لتوليد بصماته", "🔐 Send text to generate hashes", False),
+    "hashid":   (osint.hash_identify,       "🧩 أرسل البصمة لتحديد نوعها", "🧩 Send a hash to identify its type", False),
+    "b64":      (osint.base64_tool,         "🔁 أرسل نصاً للترميز/فك الترميز Base64", "🔁 Send text to Base64 encode/decode", False),
+    "genpass":  (osint.password_generator,  "🔑 أرسل الطول المطلوب (8-64) أو أرسل أي شيء لطول 16", "🔑 Send desired length (8-64) or anything for length 16", False),
 }
 
 
@@ -103,17 +175,22 @@ def kb_osint(lang):
     rows = [
         [{"text": T(lang, "🌐 معلومات IP", "🌐 IP Lookup"), "callback_data": "tool:ip"},
          {"text": T(lang, "📞 تحليل رقم", "📞 Phone Lookup"), "callback_data": "tool:phone"}],
+        [{"text": T(lang, "🔎 كاشف تليجرام (يوزر/آيدي)", "🔎 Telegram ID & User"), "callback_data": "tool:teleinfo"},
+         {"text": T(lang, "🐙 استخبارات GitHub", "🐙 GitHub OSINT"), "callback_data": "tool:github"}],
         [{"text": T(lang, "🔎 WHOIS نطاق", "🔎 Domain WHOIS"), "callback_data": "tool:domain"},
          {"text": T(lang, "🧭 سجلات DNS", "🧭 DNS Records"), "callback_data": "tool:dns"}],
+        [{"text": T(lang, "🌐 كاشف النطاقات الفرعية", "🌐 Subdomain Finder"), "callback_data": "tool:subdomain"},
+         {"text": T(lang, "🔌 فاحص المنافذ المفتوحة", "🔌 Fast Port Scanner"), "callback_data": "tool:ports"}],
+        [{"text": T(lang, "🛡️ فحص حماية الموقع (Headers)", "🛡️ Security Headers"), "callback_data": "tool:headers"},
+         {"text": T(lang, "🛡️ فاحص روابط خبيثة", "🛡️ Malicious URL"), "callback_data": "tool:urlmal"}],
         [{"text": T(lang, "📧 فحص تسريب بريد", "📧 Email Breach"), "callback_data": "tool:email"},
          {"text": T(lang, "🔑 كلمة مرور مسرّبة", "🔑 Pwned Password"), "callback_data": "tool:pwd"}],
         [{"text": T(lang, "🕵️ بحث اسم مستخدم", "🕵️ Username Search"), "callback_data": "tool:user"},
-         {"text": T(lang, "🛡️ فاحص روابط خبيثة", "🛡️ Malicious URL"), "callback_data": "tool:urlmal"}],
-        [{"text": T(lang, "🔗 تحليل رابط", "🔗 URL Analysis"), "callback_data": "tool:url"},
+         {"text": T(lang, "🔗 تحليل رابط", "🔗 URL Analysis"), "callback_data": "tool:url"}],
+        [{"text": T(lang, "📟 كاشف جهاز MAC", "📟 MAC Vendor"), "callback_data": "tool:mac"},
          {"text": T(lang, "✅ تحقق بريد", "✅ Email Verify"), "callback_data": "tool:emailval"}],
-        [{"text": T(lang, "🔎 معلومات كيان تليجرام", "🔎 Telegram Entity"), "callback_data": "tool:teleinfo"},
-         {"text": T(lang, "🧰 Google Dorks", "🧰 Google Dorks"), "callback_data": "tool:dorks"}],
-        [{"text": T(lang, "📍 مشاركة موقع (بموافقة)", "📍 Location Share (consent)"), "callback_data": "tool:loc"}],
+        [{"text": T(lang, "🧰 Google Dorks", "🧰 Google Dorks"), "callback_data": "tool:dorks"},
+         {"text": T(lang, "📍 مشاركة موقع (بموافقة)", "📍 Location Share (consent)"), "callback_data": "tool:loc"}],
         [{"text": T(lang, "🔐 مولّد Hash", "🔐 Hash Gen"), "callback_data": "tool:hashgen"},
          {"text": T(lang, "🧩 تحديد Hash", "🧩 Hash ID"), "callback_data": "tool:hashid"}],
         [{"text": T(lang, "🔁 Base64", "🔁 Base64"), "callback_data": "tool:b64"},
@@ -346,8 +423,7 @@ async def send_join(chat_id, lang, next_ch=None, edit=None):
 def kb_guide(lang):
     return [
         [{"text": T(lang, "🛰️ شرح أدوات OSINT", "🛰️ OSINT tools guide"), "callback_data": "guide:osint"}],
-        [{"text": T(lang, "🎓 شرح التعلّم و CTF", "🎓 Learning & CTF guide"), "callback_data": "guide:learn"}],
-        [{"text": T(lang, "💎 الاشتراكات والنقاط", "💎 Plans & points"), "callback_data": "guide:plans"}],
+        [{"text": T(lang, "🎓 شرح التعلّم والكتيبات الشاملة", "🎓 Learning & Handbooks guide"), "callback_data": "guide:learn"}],
         [{"text": T(lang, "⬅️ رجوع", "⬅️ Back"), "callback_data": "menu:main"}],
     ]
 
@@ -357,59 +433,54 @@ def guide_text(lang, sec):
         if lang == "ar":
             return (
                 "🛰️ <b>دليل أدوات OSINT — ماذا تفعل وكيف تستخدمها</b>\n\n"
-                "🌐 <b>معلومات IP</b>: تعرف الدولة والمدينة ومزود الخدمة لأي عنوان IP. الاستخدام: اضغط الأداة وأرسل IP مثل <code>8.8.8.8</code>.\n\n"
-                "📞 <b>تحليل رقم</b>: يكشف الدولة والشركة ونوع الخط والتوقيت. أرسل الرقم مع رمز الدولة <code>+9647...</code>. (اسم صاحب الرقم غير متاح قانونياً).\n\n"
+                "🌐 <b>معلومات IP</b>: تعرف الدولة والمدينة ومزود الخدمة لأي عنوان IP. أرسل IP مثل <code>8.8.8.8</code>.\n\n"
+                "📞 <b>تحليل رقم</b>: يكشف الدولة والشركة ونوع الخط والتوقيت. أرسل الرقم مع رمز الدولة <code>+9647...</code>.\n\n"
+                "🔎 <b>كاشف تليجرام (يوزر/آيدي)</b>: استخراج الآيدي الأصلي لأي يوزر، أو التعرف على الحساب/القناة/المجموعة عبر الآيدي الرقمي.\n\n"
+                "🐙 <b>استخبارات GitHub</b>: فحص أي حساب GitHub وكشف الاسم الحقيقي، البريد، المستودعات، والبيانات العامة.\n\n"
                 "🔎 <b>WHOIS نطاق</b>: مالك النطاق وتاريخ تسجيله وانتهائه. أرسل <code>example.com</code>.\n\n"
-                "🧭 <b>سجلات DNS</b>: عناوين الخوادم وسجلات البريد. أرسل النطاق.\n\n"
-                "📧 <b>فحص تسريب بريد</b>: هل ظهر بريدك في تسريبات؟ وما البيانات المكشوفة. أرسل الإيميل. (للدفاع: افحص بريدك أنت).\n\n"
+                "🧭 <b>سجلات DNS</b>: عناوين الخوادم وسجلات البريد (A, MX, TXT). أرسل النطاق.\n\n"
+                "🌐 <b>كاشف النطاقات الفرعية</b>: اكتشاف النطاقات الفرعية عبر سجلات الشهادات الرقمية العامة (crt.sh).\n\n"
+                "🔌 <b>فاحص المنافذ</b>: فحص المنافذ القياسية المفتوحة وسرعة استجابة الخادم.\n\n"
+                "🛡️ <b>فحص حماية الموقع (Headers)</b>: كشف برنامج الخادم، وتقييم أمان الرؤوس (HSTS, CSP, X-Frame).\n\n"
+                "📧 <b>فحص تسريب بريد</b>: هل ظهر بريدك في تسريبات؟ وما البيانات المكشوفة.\n\n"
                 "🔑 <b>كلمة مرور مسرّبة</b>: كم مرة ظهرت كلمتك في التسريبات. لا نخزّنها إطلاقاً.\n\n"
-                "🕵️ <b>بحث اسم مستخدم</b>: يبحث عن اليوزر عبر 12 منصة. أرسل اسم المستخدم.\n\n"
-                "🛡️ <b>فاحص روابط خبيثة</b>: يكشف روابط التصيّد والاحتيال قبل ما تفتحها. أرسل الرابط.\n\n"
-                "🔗 <b>تحليل رابط</b>: حالة الموقع، الخادم، رؤوس الأمان. أرسل الرابط.\n\n"
-                "🔎 <b>معلومات كيان تليجرام</b>: معلومات قناة/بوت/مجموعة عامة. أرسل اليوزر العام <code>@telegram</code>.\n\n"
-                "🧰 <b>Google Dorks</b>: يولّد استعلامات بحث متقدمة لأي نطاق. أرسل النطاق.\n\n"
-                "📍 <b>مشاركة موقع بموافقة</b>: يعطيك رابطاً ترسله لشخص، وإذا وافق يصلك موقعه. شفّاف وقانوني.\n\n"
+                "🕵️ <b>بحث اسم مستخدم</b>: يبحث عن اليوزر عبر المنصات الرقمية.\n\n"
+                "🛡️ <b>فاحص روابط خبيثة</b>: يكشف روابط التصيّد والاحتيال قبل فتحها.\n\n"
+                "📟 <b>كاشف جهاز MAC</b>: كشف الشركة المصنعة ونوع الجهاز عبر عنوان MAC.\n\n"
+                "🧰 <b>Google Dorks</b>: يولّد استعلامات بحث متقدمة لأي نطاق.\n\n"
+                "📍 <b>مشاركة موقع بموافقة</b>: رابط شفاف لمشاركة الإحداثيات بموافقة الطرف الآخر.\n\n"
                 "🔐 <b>Hash / Base64 / مولّد كلمة مرور</b>: أدوات تشفير وترميز وتوليد كلمات مرور قوية."
             )
         return (
             "🛰️ <b>OSINT Tools Guide — what each does & how to use</b>\n\n"
-            "🌐 <b>IP Lookup</b>: country, city, ISP of any IP. Tap it and send an IP like <code>8.8.8.8</code>.\n\n"
-            "📞 <b>Phone Analysis</b>: country, carrier, line type, timezone. Send with country code <code>+1...</code>. (Owner name is not legally available).\n\n"
-            "🔎 <b>Domain WHOIS</b>: owner, registration & expiry dates. Send <code>example.com</code>.\n\n"
-            "🧭 <b>DNS Records</b>: server addresses and mail records. Send a domain.\n\n"
-            "📧 <b>Email Breach</b>: was your email leaked, and what data was exposed. Send an email (defensive: check your own).\n\n"
-            "🔑 <b>Pwned Password</b>: how many times your password appeared in breaches. Never stored.\n\n"
-            "🕵️ <b>Username Search</b>: searches a username across 12 platforms.\n\n"
-            "🛡️ <b>Malicious URL</b>: detects phishing/scam links before you open them.\n\n"
-            "🔗 <b>URL Analysis</b>: site status, server, security headers.\n\n"
-            "🔎 <b>Telegram Entity</b>: info about a public channel/bot/group. Send <code>@telegram</code>.\n\n"
-            "🧰 <b>Google Dorks</b>: generates advanced search queries for a domain.\n\n"
-            "📍 <b>Consent Location</b>: gives you a link to send someone; if they agree, you receive their location.\n\n"
-            "🔐 <b>Hash / Base64 / Password Gen</b>: encoding & strong-password utilities."
+            "🌐 <b>IP Lookup</b>: country, city, ISP of any IP.\n\n"
+            "📞 <b>Phone Analysis</b>: country, carrier, line type, timezone.\n\n"
+            "🔎 <b>Telegram ID & User</b>: extract original ID from username or lookup account from numeric ID.\n\n"
+            "🐙 <b>GitHub OSINT</b>: full intelligence on any GitHub user (repos, email, bio).\n\n"
+            "🔎 <b>Domain WHOIS</b>: owner, registrar, expiry dates.\n\n"
+            "🧭 <b>DNS Records</b>: server addresses & mail records.\n\n"
+            "🌐 <b>Subdomain Finder</b>: discover subdomains via SSL transparency logs.\n\n"
+            "🔌 <b>Port Scanner</b>: scan common standard open ports.\n\n"
+            "🛡️ <b>Security Headers</b>: inspect web server banner & protection headers.\n\n"
+            "📧 <b>Email Breach</b>: check if your email was leaked.\n\n"
+            "🔑 <b>Pwned Password</b>: check breach counts.\n\n"
+            "🕵️ <b>Username Search</b>: multi-platform username lookup.\n\n"
+            "🛡️ <b>Malicious URL</b>: detect phishing links.\n\n"
+            "📟 <b>MAC Vendor</b>: identify device hardware vendor.\n\n"
+            "🧰 <b>Google Dorks</b>: generate advanced search queries.\n\n"
+            "🔐 <b>Hash / Base64 / Password Gen</b>: security utilities."
         )
-    if sec == "learn":
-        return T(lang,
-            "🎓 <b>دليل التعلّم و CTF</b>\n\n"
-            "🎓 <b>الأكاديمية</b>: 5 مسارات (استطلاع، ويب، شبكات، تشفير، لينكس). اضغط المسار لقراءة دروسه الطويلة المبسّطة.\n\n"
-            "💻 <b>تعلّم البرمجة</b>: دورات بايثون (من الصفر للاحتراف)، جافاسكربت، Bash، وأمن سيبراني.\n\n"
-            "🚩 <b>تحديات CTF</b>: حل اللغز ثم اضغط «إرسال العلم» وأرسل الإجابة بصيغة <code>FLAG{...}</code> لتكسب النقاط.\n\n"
-            "🏆 <b>المتصدّرون</b>: ترتيب أعلى اللاعبين نقاطاً. النقاط تجيك من حل التحديات والإحالات والمكافأة اليومية.",
-            "🎓 <b>Learning & CTF Guide</b>\n\n"
-            "🎓 <b>Academy</b>: 5 tracks (recon, web, networking, crypto, Linux). Tap a track to read its long, simple lessons.\n\n"
-            "💻 <b>Learn to Code</b>: Python (zero to pro), JavaScript, Bash, and cybersecurity courses.\n\n"
-            "🚩 <b>CTF</b>: solve the puzzle, tap 'Submit flag', and send the answer as <code>FLAG{...}</code> to earn points.\n\n"
-            "🏆 <b>Leaderboard</b>: top players by points. Earn points from challenges, referrals, and the daily bonus.")
     return T(lang,
-        "💎 <b>الاشتراكات والنقاط</b>\n\n"
-        "<b>الباقات</b>: FREE (8 عمليات/يوم)، PRO (150/يوم + كل الدروس)، ELITE (غير محدود).\n"
-        "للاشتراك: القائمة ← 💎 ترقية ← اختر الباقة ← ادفع بأمان عبر Stripe. تُفعَّل باقتك تلقائياً.\n\n"
-        "<b>النقاط</b> 🏅: تكسبها من حل تحديات CTF (50-120 نقطة)، ومن دعوة الأصدقاء (25 نقطة/صديق)، ومن المكافأة اليومية (10 نقاط).\n\n"
-        "<b>الإحالة</b>: افتح «حسابي» وانسخ رابط الإحالة الخاص بك وشاركه.",
-        "💎 <b>Plans & Points</b>\n\n"
-        "<b>Plans</b>: FREE (8 scans/day), PRO (150/day + all lessons), ELITE (unlimited).\n"
-        "To subscribe: Menu → 💎 Upgrade → pick a plan → pay via Stripe. Your plan activates automatically.\n\n"
-        "<b>Points</b> 🏅: earn from CTF challenges (50-120 pts), inviting friends (25 pts each), and the daily bonus (10 pts).\n\n"
-        "<b>Referral</b>: open 'My Account' and share your referral link.")
+        "🎓 <b>دليل التعلّم والكتيبات الشاملة</b>\n\n"
+        "🎓 <b>أكاديمية الاختراق الأخلاقي</b>: 5 مسارات شاملة (الاستطلاع و OSINT، أمن الويب OWASP، الشبكات، التشفير، لينكس).\n"
+        "بمجرد الضغط على أي مسار، يُرسل لك البوت فوراً <b>كتاباً تعليمياً كاملاً (.txt)</b> يحمل شعار ويوزر البوت <code>@Kashef4bot</code> ويشرح المسار من الصفر للاحتراف!\n\n"
+        "💻 <b>تعلّم البرمجة</b>: 4 دورات عملية (بايثون السيبراني، جافاسكربت، Bash، أساسيات الدفاع السيبراني).\n"
+        "كل دورة مزودة بكتيب ودليل برمجي متكامل مع أكواد عملية جاهزة للتحميل.\n\n"
+        "🚩 <b>تحديات CTF</b>: تحديات تفاعلية لاختبار قدراتك في التشفير والويب والتجزئة.",
+        "🎓 <b>Learning & Handbooks Guide</b>\n\n"
+        "🎓 <b>Ethical Hacking Academy</b>: 5 tracks with full downloadable zero-to-hero handbooks with @Kashef4bot branding.\n\n"
+        "💻 <b>Learn to Code</b>: 4 programming courses with complete downloadable books and practical codes.\n\n"
+        "🚩 <b>CTF Challenges</b>: test your skills in crypto, web, and hashing.")
 
 
 # ---------- admin panel ----------
@@ -857,10 +928,28 @@ async def _handle_callback(cq):
         await edit(prompt, kb_back(lang, "menu:osint"))
     elif data.startswith("acad:"):
         mid = data.split(":", 1)[1]
-        await _show_academy_module(edit, lang, mid)
+        await _show_academy_module(edit, lang, mid, chat_id)
     elif data.startswith("course:"):
         cid = data.split(":", 1)[1]
-        await _show_course(edit, lang, cid)
+        await _show_course(edit, lang, cid, chat_id)
+    elif data.startswith("doc:acad:"):
+        mid = data.split(":", 2)[2]
+        doc = academy_files.get_academy_doc(mid)
+        if doc:
+            await tg.answer_callback(cq["id"], T(lang, "⏳ جاري إرسال الكتيب الشامل...", "⏳ Sending full handbook..."))
+            caption = T(lang,
+                f"📚 <b>الكتيب التعليمي الكامل: {esc(doc['title'])}</b>\n\n🛡️ <i>إعداد منصة كاشف للأمن السيبراني | @Kashef4bot</i>\n📥 ملف شامل ومفصل من الصفر للاحتراف.",
+                f"📚 <b>Comprehensive Handbook: {esc(doc['title'])}</b>\n\n🛡️ <i>Kashef OSINT Suite | @Kashef4bot</i>")
+            await tg.send_document(chat_id, doc["filename"], doc["content"].encode("utf-8"), caption=caption)
+    elif data.startswith("doc:course:"):
+        cid = data.split(":", 2)[2]
+        doc = academy_files.get_course_doc(cid)
+        if doc:
+            await tg.answer_callback(cq["id"], T(lang, "⏳ جاري إرسال الملف الشامل...", "⏳ Sending full course guide..."))
+            caption = T(lang,
+                f"💻 <b>الملف التعليمي الشامل: {esc(doc['title'])}</b>\n\n🛡️ <i>إعداد منصة كاشف للأمن السيبراني | @Kashef4bot</i>\n📥 ملف شامل ومفصل من الصفر للاحتراف.",
+                f"💻 <b>Comprehensive Course Guide: {esc(doc['title'])}</b>\n\n🛡️ <i>Kashef OSINT Suite | @Kashef4bot</i>")
+            await tg.send_document(chat_id, doc["filename"], doc["content"].encode("utf-8"), caption=caption)
     elif data.startswith("ctf:"):
         rest = data.split(":", 1)[1]
         if rest == "board":
@@ -876,28 +965,68 @@ async def _handle_callback(cq):
         await _start_checkout(chat_id, lang, pkg)
 
 
-async def _show_academy_module(edit, lang, mid):
+async def _show_academy_module(edit, lang, mid, chat_id=None):
     mod = next((m for m in content.ACADEMY if m["id"] == mid), None)
+    doc = academy_files.get_academy_doc(mid)
     if not mod:
         return
-    parts = [f"<b>{esc(mod['title'][lang])}</b>", ""]
-    for i, ls in enumerate(mod["lessons"], 1):
-        parts.append(f"<b>{i}. {esc(ls['t'][lang])}</b>")
-        parts.append(ls["b"][lang])
-        parts.append("")
-    await edit("\n".join(parts), kb_back(lang, "menu:academy"))
+    title = mod["title"][lang]
+    lessons_list = "\n".join([f"• <b>الفصل {i}:</b> {esc(ls['t'][lang])}" for i, ls in enumerate(mod["lessons"], 1)])
+    text = T(lang,
+        f"🎓 <b>{esc(title)}</b>\n\n"
+        f"📑 <b>أهم محاور وفصول هذا المسار:</b>\n{lessons_list}\n\n"
+        f"📄 <b>الكتيب التعليمي الشامل (.txt):</b>\n"
+        f"تم إعداد كتيب كامل ومفصل يشرح هذا المسار بالتفصيل الممل من الصفر للاحتراف، يحمل شعار ويوزر البوت الرسمي <code>@Kashef4bot</code>.\n\n"
+        f"🚀 <i>تم إرسال الملف كاملاً إلى محادثتك الآن لتنزيله وقراءته دون إنترنت!</i>",
+        f"🎓 <b>{esc(title)}</b>\n\n"
+        f"📑 <b>Track Chapters:</b>\n{lessons_list}\n\n"
+        f"📄 <b>Full Educational Handbook (.txt):</b>\nA complete zero-to-mastery handbook with bot branding @Kashef4bot has been sent to your chat below!"
+    )
+    kb = [
+        [{"text": T(lang, "📥 إعادة إرسال الكتيب الشامل 📄", "📥 Re-send Full Handbook 📄"), "callback_data": f"doc:acad:{mid}"}],
+        [{"text": T(lang, "⬅️ رجوع للأكاديمية", "⬅️ Back to Academy"), "callback_data": "menu:academy"}],
+    ]
+    await edit(text, kb)
+    if chat_id and doc:
+        caption = T(lang,
+            f"📚 <b>الكتيب التعليمي الكامل: {esc(doc['title'])}</b>\n\n🛡️ <i>إعداد منصة كاشف للأمن السيبراني | @Kashef4bot</i>\n📥 ملف شامل ومفصل من الصفر للاحتراف.",
+            f"📚 <b>Comprehensive Handbook: {esc(doc['title'])}</b>\n\n🛡️ <i>Kashef OSINT Suite | @Kashef4bot</i>")
+        try:
+            await tg.send_document(chat_id, doc["filename"], doc["content"].encode("utf-8"), caption=caption)
+        except Exception:
+            pass
 
 
-async def _show_course(edit, lang, cid):
+async def _show_course(edit, lang, cid, chat_id=None):
     c = next((x for x in content.COURSES if x["id"] == cid), None)
+    doc = academy_files.get_course_doc(cid)
     if not c:
         return
-    parts = [f"<b>{esc(c['title'][lang])}</b>", ""]
-    for i, ls in enumerate(c["lessons"], 1):
-        parts.append(f"<b>{i}. {esc(ls['t'][lang])}</b>")
-        parts.append(ls["b"][lang])
-        parts.append("")
-    await edit("\n".join(parts), kb_back(lang, "menu:courses"))
+    title = c["title"][lang]
+    lessons_list = "\n".join([f"• <b>الدرس {i}:</b> {esc(ls['t'][lang])}" for i, ls in enumerate(c["lessons"], 1)])
+    text = T(lang,
+        f"💻 <b>{esc(title)}</b>\n\n"
+        f"📑 <b>أهم محاور ودروس الدورة:</b>\n{lessons_list}\n\n"
+        f"📄 <b>الكتاب والملف البرمجي الكامل (.txt):</b>\n"
+        f"تم إعداد كتاب ودليل شامل ومفصل يشرح هذه اللغة والتقنية من الصفر للاحتراف مع أكواد ومشاريع أمنية كاملة، يحمل شعار ويوزر البوت الرسمي <code>@Kashef4bot</code>.\n\n"
+        f"🚀 <i>تم إرسال الملف كاملاً إلى محادثتك الآن لتنزيله والتعلم منه دون إنترنت!</i>",
+        f"💻 <b>{esc(title)}</b>\n\n"
+        f"📑 <b>Course Lessons:</b>\n{lessons_list}\n\n"
+        f"📄 <b>Full Course Book (.txt):</b>\nA comprehensive course book with bot branding @Kashef4bot has been sent to your chat below!"
+    )
+    kb = [
+        [{"text": T(lang, "📥 إعادة إرسال الملف الكامل 📄", "📥 Re-send Full Guide 📄"), "callback_data": f"doc:course:{cid}"}],
+        [{"text": T(lang, "⬅️ رجوع للدورات", "⬅️ Back to Courses"), "callback_data": "menu:courses"}],
+    ]
+    await edit(text, kb)
+    if chat_id and doc:
+        caption = T(lang,
+            f"💻 <b>الملف التعليمي الشامل: {esc(doc['title'])}</b>\n\n🛡️ <i>إعداد منصة كاشف للأمن السيبراني | @Kashef4bot</i>\n📥 ملف شامل ومفصل من الصفر للاحتراف.",
+            f"💻 <b>Comprehensive Course Guide: {esc(doc['title'])}</b>\n\n🛡️ <i>Kashef OSINT Suite | @Kashef4bot</i>")
+        try:
+            await tg.send_document(chat_id, doc["filename"], doc["content"].encode("utf-8"), caption=caption)
+        except Exception:
+            pass
 
 
 async def _show_ctf(edit, lang, cid, chat_id):

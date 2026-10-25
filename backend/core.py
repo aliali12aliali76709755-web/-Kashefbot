@@ -80,6 +80,22 @@ class TelegramClient:
             payload["reply_markup"] = {"inline_keyboard": keyboard}
         return await self._call("sendMessage", payload)
 
+    async def send_document(self, chat_id, filename: str, content: bytes, caption: str = None, keyboard=None):
+        data = {"chat_id": str(chat_id)}
+        if caption:
+            data["caption"] = caption
+            data["parse_mode"] = "HTML"
+        if keyboard is not None:
+            import json
+            data["reply_markup"] = json.dumps({"inline_keyboard": keyboard})
+        files = {"document": (filename, content, "text/plain; charset=utf-8")}
+        async with httpx.AsyncClient(timeout=35) as http:
+            r = await http.post(f"{self.base}/sendDocument", data=data, files=files)
+            try:
+                return r.json()
+            except Exception:
+                return {"ok": False, "status": r.status_code}
+
     async def edit_message(self, chat_id, message_id, text, keyboard=None, disable_preview=True):
         payload = {
             "chat_id": chat_id,

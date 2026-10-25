@@ -503,3 +503,294 @@ async def google_dorks(target: str, lang="ar") -> str:
         link = "https://www.google.com/search?q=" + quote_plus(q)
         lines.append(f"🔍 <a href=\"{link}\">{e(label)}</a>\n   <code>{e(q)}</code>")
     return "\n".join(lines)
+
+
+async def subdomain_scanner(target: str, lang="ar") -> str:
+    domain = target.strip().replace("http://", "").replace("https://", "").split("/")[0].split(":")[0]
+    domain = re.sub(r"^\*?\.", "", domain)
+    if not domain or "." not in domain:
+        return _t(lang, "❌ أرسل نطاقاً صالحاً مثل <code>example.com</code>.", "❌ Send a valid domain like <code>example.com</code>.")
+    
+    url = f"https://crt.sh/?q=%.{domain}&output=json"
+    subs = set()
+    try:
+        async with httpx.AsyncClient(timeout=15, headers={"User-Agent": UA}) as c:
+            r = await c.get(url)
+            if r.status_code == 200:
+                data = r.json()
+                for item in data:
+                    val = item.get("name_value", "")
+                    for line in val.split("\n"):
+                        clean = line.strip().lower()
+                        if clean.endswith(domain) and not clean.startswith("*."):
+                            subs.add(clean)
+    except Exception:
+        pass
+
+    title = _t(lang, f"🌐 <b>كاشف النطاقات الفرعية (SSL/TLS Logs)</b>\nالهدف: <code>{e(domain)}</code>",
+                     f"🌐 <b>Subdomain Discovery (SSL/TLS Logs)</b>\nTarget: <code>{e(domain)}</code>")
+    
+    if not subs:
+        return f"{title}\n\n" + _t(lang, "ℹ️ لم يتم العثور على نطاقات فرعية عامة مسجلة في سجلات الشهادات حديثاً.",
+                                         "ℹ️ No subdomains found in public certificate transparency logs.")
+    
+    sorted_subs = sorted(list(subs))[:25]
+    lines = [title, "", _t(lang, f"تم اكتشاف <b>{len(subs)}</b> نطاقاً فرعياً (عرض أهم {len(sorted_subs)}):",
+                                 f"Found <b>{len(subs)}</b> subdomains (showing top {len(sorted_subs)}):"), ""]
+    for s in sorted_subs:
+        lines.append(f"• <code>{e(s)}</code>")
+    
+    if len(subs) > 25:
+        lines.append("\n" + _t(lang, f"<i>... ويوجد {len(subs) - 25} نطاقاً إضافياً في السجلات.</i>",
+                                     f"<i>... and {len(subs) - 25} more subdomains in logs.</i>"))
+    return "\n".join(lines)
+
+
+async def github_user_osint(username: str, lang="ar") -> str:
+    u = username.strip().lstrip("@").split("/")[-1]
+    if not u or not re.match(r"^[A-Za-z0-9_-]{1,39}$", u):
+        return _t(lang, "❌ أرسل اسم مستخدم صالح على GitHub مثل <code>torvalds</code>.",
+                         "❌ Send a valid GitHub username like <code>torvalds</code>.")
+    
+    url = f"https://api.github.com/users/{u}"
+    try:
+        async with httpx.AsyncClient(timeout=12, headers={"User-Agent": UA}) as c:
+            r = await c.get(url)
+            if r.status_code == 404:
+                return _t(lang, f"❌ لم يتم العثور على حساب GitHub باسم <code>{e(u)}</code>.",
+                                 f"❌ GitHub user <code>{e(u)}</code> not found.")
+            if r.status_code != 200:
+                return _t(lang, "❌ تعذّر الاتصال بخوادم GitHub حالياً.", "❌ Could not reach GitHub API.")
+            d = r.json()
+    except Exception:
+        return _t(lang, "❌ حدث خطأ أثناء الاتصال بالخادم.", "❌ Connection error.")
+
+    title = _t(lang, f"🐙 <b>استخبارات حساب GitHub — OSINT</b>", f"🐙 <b>GitHub User Intelligence — OSINT</b>")
+    name = d.get("name") or "—"
+    bio = d.get("bio") or "—"
+    company = d.get("company") or "—"
+    location = d.get("location") or "—"
+    email = d.get("email") or _t(lang, "غير معلن (خاص)", "Hidden (private)")
+    blog = d.get("blog") or "—"
+    twitter = d.get("twitter_username") or "—"
+    created_at = (d.get("created_at") or "")[:10]
+    repos = d.get("public_repos", 0)
+    gists = d.get("public_gists", 0)
+    followers = d.get("followers", 0)
+    following = d.get("following", 0)
+
+    lines = [
+        title, "",
+        f"👤 {_t(lang, 'الاسم الكامل', 'Full Name')}: <b>{e(name)}</b>",
+        f"🔗 {_t(lang, 'اسم المستخدم', 'Username')}: <code>@{e(u)}</code>",
+        f"🌐 {_t(lang, 'رابط الحساب', 'Profile')}: {d.get('html_url')}",
+        f"🏢 {_t(lang, 'الشركة/المنظمة', 'Company')}: {e(company)}",
+        f"📍 {_t(lang, 'الموقع الجغرافي', 'Location')}: {e(location)}",
+        f"📧 {_t(lang, 'البريد الإلكتروني', 'Public Email')}: <code>{e(email)}</code>",
+        f"🐦 {_t(lang, 'حساب تويتر/X', 'Twitter/X')}: {e(twitter)}",
+        f"📅 {_t(lang, 'تاريخ إنشاء الحساب', 'Joined Date')}: <code>{e(created_at)}</code>",
+        f"📦 {_t(lang, 'المستودعات العامة', 'Public Repos')}: <b>{repos}</b>",
+        f"👥 {_t(lang, 'المتابعون / يتابع', 'Followers / Following')}: <b>{followers}</b> / <b>{following}</b>",
+    ]
+    if bio and bio != "—":
+        lines.append(f"\n📝 {_t(lang, 'النبذة التعريفية (Bio)', 'Bio')}:\n<i>{e(bio[:300])}</i>")
+    if blog and blog != "—":
+        lines.append(f"🔗 {_t(lang, 'الموقع الشخصي', 'Website')}: {e(blog)}")
+    return "\n".join(lines)
+
+
+async def mac_lookup(mac_addr: str, lang="ar") -> str:
+    raw = mac_addr.strip().upper()
+    clean = re.sub(r"[^A-F0-9]", "", raw)
+    if len(clean) < 6:
+        return _t(lang, "❌ أرسل عنوان MAC صالح مثل <code>00:1A:2B:3C:4D:5E</code>.",
+                         "❌ Send a valid MAC address like <code>00:1A:2B:3C:4D:5E</code>.")
+    
+    oui = clean[:6]
+    formatted_mac = ":".join(clean[i:i+2] for i in range(0, min(len(clean), 12), 2))
+    vendor = None
+
+    # Offline common vendor OUI table for ultra-fast response
+    known_vendors = {
+        "001A2B": "Ayecom Technology Co., Ltd.",
+        "000C29": "VMware, Inc.",
+        "005056": "VMware, Inc.",
+        "080027": "Oracle VirtualBox",
+        "525400": "QEMU Virtual Machine",
+        "B827EB": "Raspberry Pi Foundation",
+        "DCA632": "Raspberry Pi Trading Ltd",
+        "E45F01": "Raspberry Pi Trading Ltd",
+        "00163E": "Xen Virtual Machine",
+        "ACDE48": "Apple, Inc.",
+        "F01898": "Apple, Inc.",
+        "3C0630": "Apple, Inc.",
+        "F4F5D8": "Google, Inc.",
+        "001A11": "Google, Inc.",
+        "F07959": "Cisco Systems, Inc.",
+        "00000C": "Cisco Systems, Inc.",
+        "BC5436": "Samsung Electronics",
+        "5001D9": "Samsung Electronics",
+        "001E10": "Huawei Technologies Co., Ltd.",
+        "70723C": "Huawei Device Co., Ltd.",
+        "286C07": "Xiaomi Communications Co Ltd",
+        "640980": "Xiaomi Communications Co Ltd",
+        "00E04C": "Realtek Semiconductor Corp.",
+        "00155D": "Microsoft Corporation (Hyper-V)",
+    }
+    if oui in known_vendors:
+        vendor = known_vendors[oui]
+    else:
+        try:
+            async with httpx.AsyncClient(timeout=8, headers={"User-Agent": UA}) as c:
+                r = await c.get(f"https://api.macvendors.com/{clean[:6]}")
+                if r.status_code == 200 and r.text:
+                    vendor = r.text.strip()
+        except Exception:
+            pass
+
+    title = _t(lang, "📟 <b>كاشف الشركة المصنعة لعنوان MAC (OUI Lookup)</b>",
+                     "📟 <b>MAC Vendor Intelligence (OUI Lookup)</b>")
+    if not vendor:
+        vendor = _t(lang, "الشركة غير معروفة في السجلات العامة المباشرة", "Unknown vendor / Private OUI")
+    
+    lines = [
+        title, "",
+        f"🏷️ {_t(lang, 'عنوان MAC', 'MAC Address')}: <code>{formatted_mac}</code>",
+        f"🔍 {_t(lang, 'معرّف المنظمة (OUI)', 'OUI Prefix')}: <code>{clean[:6]}</code>",
+        f"🏢 {_t(lang, 'الشركة المصنعة للجهاز', 'Manufacturer / Vendor')}: <b>{e(vendor)}</b>",
+        "",
+        _t(lang, "💡 <i>يكشف هذا الفحص نوع الجهاز (هاتف، لابتوب، جهاز راوتر، خادم وهمي Virtual Machine) عبر أول 3 بايتات من عنوان MAC.</i>",
+                 "💡 <i>Identifies device vendor (phone, laptop, router, or virtual machine) via first 3 bytes.</i>")
+    ]
+    return "\n".join(lines)
+
+
+async def security_headers_scan(target: str, lang="ar") -> str:
+    url = target.strip()
+    if not url.startswith("http://") and not url.startswith("https://"):
+        url = "https://" + url
+    
+    parsed = urlparse(url)
+    host = parsed.netloc or parsed.path
+    
+    try:
+        async with httpx.AsyncClient(timeout=12, follow_redirects=True, headers={"User-Agent": UA}) as c:
+            r = await c.get(url)
+            headers = r.headers
+            status = r.status_code
+    except Exception as ex:
+        # Fallback to http if https failed
+        if url.startswith("https://"):
+            try:
+                url = "http://" + host
+                async with httpx.AsyncClient(timeout=12, follow_redirects=True, headers={"User-Agent": UA}) as c:
+                    r = await c.get(url)
+                    headers = r.headers
+                    status = r.status_code
+            except Exception:
+                return _t(lang, f"❌ تعذّر الاتصال بالموقع <code>{e(host)}</code>.",
+                                 f"❌ Could not connect to <code>{e(host)}</code>.")
+        else:
+            return _t(lang, f"❌ تعذّر الاتصال بالموقع <code>{e(host)}</code>.",
+                             f"❌ Could not connect to <code>{e(host)}</code>.")
+
+    title = _t(lang, f"🛡️ <b>فحص رؤوس الحماية وتقنيات الموقع</b>\nالهدف: <code>{e(host)}</code>",
+                     f"🛡️ <b>Security Headers & Tech Scanner</b>\nTarget: <code>{e(host)}</code>")
+    
+    server = headers.get("server") or _t(lang, "مخفي أو محمي", "Hidden or protected")
+    powered_by = headers.get("x-powered-by")
+    
+    hsts = "strict-transport-security" in headers
+    csp = "content-security-policy" in headers
+    xframe = "x-frame-options" in headers
+    xcto = "x-content-type-options" in headers
+    referrer = "referrer-policy" in headers
+
+    score = 0
+    if hsts: score += 25
+    if csp: score += 30
+    if xframe: score += 20
+    if xcto: score += 15
+    if referrer: score += 10
+
+    if score >= 80: grade = "🟢 A (ممتاز)"
+    elif score >= 60: grade = "🟡 B (جيد)"
+    elif score >= 40: grade = "🟠 C (متوسط)"
+    else: grade = "🔴 F (ضعيف - غير محمي)"
+
+    lines = [
+        title, "",
+        f"📊 {_t(lang, 'تقييم الأمان العام', 'Security Grade')}: <b>{grade}</b> ({score}/100)",
+        f"🖥️ {_t(lang, 'برنامج الخادم (Server)', 'Server Banner')}: <code>{e(server)}</code>",
+    ]
+    if powered_by:
+        lines.append(f"⚙️ {_t(lang, 'تقنية الويب (X-Powered-By)', 'Tech Stack')}: <code>{e(powered_by)}</code>")
+    
+    lines.append(f"🌐 {_t(lang, 'رمز استجابة HTTP', 'HTTP Status')}: <code>{status}</code>\n")
+    lines.append(_t(lang, "<b>تحليل رؤوس الأمان (Security Headers):</b>", "<b>Security Headers Analysis:</b>"))
+    
+    lines.append(f"{'✅' if hsts else '❌'} <b>HSTS</b> (Strict-Transport-Security): " + 
+                 (_t(lang, "مفعّل (يفرض تشفير HTTPS دائماً)", "Enabled (forces HTTPS)") if hsts else _t(lang, "غير مفعّل (معرّض لهجمات SSL Strip)", "Missing (SSL Strip risk)")))
+    
+    lines.append(f"{'✅' if csp else '❌'} <b>CSP</b> (Content-Security-Policy): " + 
+                 (_t(lang, "مفعّل (حماية قصوى ضد XSS وحقن الأكواد)", "Enabled (Anti-XSS protection)") if csp else _t(lang, "غير مفعّل (خطر ثغرات XSS)", "Missing (XSS risk)")))
+    
+    lines.append(f"{'✅' if xframe else '❌'} <b>X-Frame-Options</b>: " + 
+                 (_t(lang, f"مفعّل ({headers.get('x-frame-options')}) — يمنع هجمات Clickjacking", "Enabled — prevents Clickjacking") if xframe else _t(lang, "غير مفعّل (يمكن تضمين الموقع في iframes)", "Missing (Clickjacking risk)")))
+    
+    lines.append(f"{'✅' if xcto else '❌'} <b>X-Content-Type-Options</b>: " + 
+                 (_t(lang, "مفعّل (يمنع MIME-sniffing)", "Enabled (nosniff)") if xcto else _t(lang, "غير مفعّل", "Missing")))
+
+    return "\n".join(lines)
+
+
+async def fast_port_scan(target: str, lang="ar") -> str:
+    host = target.strip().replace("http://", "").replace("https://", "").split("/")[0].split(":")[0]
+    if not host:
+        return _t(lang, "❌ أرسل عنوان IP أو نطاق صالح مثل <code>scanme.nmap.org</code>.",
+                         "❌ Send a valid IP or domain like <code>scanme.nmap.org</code>.")
+    
+    common_ports = [
+        (21, "FTP"),
+        (22, "SSH"),
+        (25, "SMTP"),
+        (53, "DNS"),
+        (80, "HTTP"),
+        (110, "POP3"),
+        (143, "IMAP"),
+        (443, "HTTPS"),
+        (3306, "MySQL"),
+        (3389, "RDP"),
+        (5432, "PostgreSQL"),
+        (8080, "HTTP-Proxy")
+    ]
+
+    title = _t(lang, f"🔌 <b>فاحص المنافذ القياسية المفتوحة</b>\nالهدف: <code>{e(host)}</code>",
+                     f"🔌 <b>Common Ports Scanner</b>\nTarget: <code>{e(host)}</code>")
+    
+    open_ports = []
+    
+    async def _test_port(p, service):
+        try:
+            _, writer = await asyncio.wait_for(asyncio.open_connection(host, p), timeout=0.9)
+            writer.close()
+            await writer.wait_closed()
+            open_ports.append((p, service))
+        except Exception:
+            pass
+
+    # Run port probes concurrently
+    await asyncio.gather(*[_test_port(p, s) for p, s in common_ports])
+
+    if not open_ports:
+        return f"{title}\n\n" + _t(lang, "🔒 جميع المنافذ القياسية المفحوصة تبدو مغلقة أو خلف جدار ناري (Firewall / Filtered).",
+                                         "🔒 All checked common ports appear closed or filtered by a firewall.")
+    
+    open_ports.sort(key=lambda x: x[0])
+    lines = [title, "", _t(lang, f"تم اكتشاف <b>{len(open_ports)}</b> منفذاً مفتوحاً:", f"Found <b>{len(open_ports)}</b> open ports:"), ""]
+    for p, s in open_ports:
+        lines.append(f"🟢 المنفذ <code>{p}</code> ({s}) — <b>مفتوح (Open)</b>")
+    
+    lines.append("\n" + _t(lang, "⚠️ <i>تنبيه: هذا الفحص يعتمد على اتصال TCP قياسي خفيف للمنافذ الأكثر شيوعاً.</i>",
+                                 "⚠️ <i>Note: Uses lightweight standard TCP probes for most common ports.</i>"))
+    return "\n".join(lines)
