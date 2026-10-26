@@ -350,17 +350,29 @@ def kb_account(lang):
 async def get_forced_channels() -> list:
     cfg = await get_config()
     channels = cfg.get("forced_channels")
-    if isinstance(channels, list):
-        return [c for c in channels if c]
-    single = cfg.get("forced_channel")
-    if single:
-        return [single]
-    return []
+    if not isinstance(channels, list):
+        single = cfg.get("forced_channel")
+        channels = [single] if single else []
+    cleaned = []
+    for c in channels:
+        if not c:
+            continue
+        c = str(c).strip()
+        if "t.me/" in c:
+            c = c.split("t.me/")[-1].split("/")[0].split("?")[0]
+        if not c.startswith("@") and not c.startswith("-"):
+            c = "@" + c
+        if c not in cleaned:
+            cleaned.append(c)
+    return cleaned
 
 
 async def get_next_unjoined_channel(chat_id):
     """Returns (channel_str, current_step, total_channels) or None if all are joined."""
-    u = await db.users.find_one({"telegram_id": chat_id})
+    try:
+        u = await db.users.find_one({"telegram_id": chat_id})
+    except Exception:
+        u = None
     if chat_id == ADMIN_ID or (u and u.get("is_admin")):
         return None
     channels = await get_forced_channels()
@@ -370,11 +382,36 @@ async def get_next_unjoined_channel(chat_id):
         try:
             res = await tg.get_chat_member(ch, chat_id)
             if res.get("ok"):
-                status = res["result"]["status"]
-                if status in ("left", "kicked"):
+                result = res.get("result", {})
+                status = result.get("status")
+                # Active member statuses in Telegram Bot API:
+                is_sub = False
+                if status in ("creator", "administrator", "member"):
+                    is_sub = True
+                elif status == "restricted" and result.get("is_member", True):
+                    is_sub = True
+                
+                # If not an active member (status is 'left', 'kicked', etc.) -> user must join
+                if not is_sub:
                     return (ch, idx, len(channels))
             else:
-                # If bot is not admin or cannot verify, don't trap the user, continue checking others
+                # Telegram returned an error
+                err_desc = str(res.get("description", "")).lower()
+                user_not_found_keywords = (
+                    "user not found",
+                    "participant_id_invalid",
+                    "user_not_participant",
+                    "not a participant",
+                    "not a member",
+                    "user is not a member",
+                    "chat_member_not_found",
+                )
+                if any(kw in err_desc for kw in user_not_found_keywords):
+                    # User is confirmed NOT in the channel / left the channel
+                    return (ch, idx, len(channels))
+                
+                # If error is bot-related (bot is not admin, chat not found, etc.):
+                # skip checking this channel so bot doesn't freeze for everyone if channel was deleted
                 continue
         except Exception:
             continue
@@ -392,31 +429,61 @@ async def send_join(chat_id, lang, next_ch=None, edit=None):
     if not next_ch:
         return
     ch, step, total = next_ch
-    clean_ch = ch.lstrip("@")
-    if clean_ch.startswith("https://") or clean_ch.startswith("http://"):
-        link = clean_ch
-        display_name = clean_ch
-    else:
-        link = f"https://t.me/{clean_ch}"
-        display_name = f"@{clean_ch}"
+    
+    # Try to resolve a friendly link & title
+    link = None
+    display_name = None
+    try:
+        c_info = await tg.get_chat(ch)
+        if c_info.get("ok"):
+            res_c = c_info.get("result", {})
+            title = res_c.get("title")
+            username = res_c.get("username")
+            inv = res_c.get("invite_link")
+            if username:
+                link = f"https://t.me/{username}"
+                display_name = title or f"@{username}"
+            elif inv:
+                link = inv
+                display_name = title or ch
+    except Exception:
+        pass
+    
+    if not link:
+        clean_ch = ch.lstrip("@")
+        if clean_ch.startswith("https://") or clean_ch.startswith("http://"):
+            link = clean_ch
+            display_name = clean_ch
+        elif ch.startswith("-"):
+            link = "https://t.me/"
+            display_name = ch
+        else:
+            link = f"https://t.me/{clean_ch}"
+            display_name = f"@{clean_ch}"
+            
+    if not display_name:
+        display_name = ch
 
     if step > 1:
         text = T(lang,
-                 f"🎉 <b>أحسنت!</b>\n\nيرجى الآن الاشتراك في القناة التالية [{step}/{total}]:\n👉 <b>{esc(display_name)}</b>\n\nاضغط على الزر أدناه للاشتراك ثم اضغط «✅ تحقّقت».",
-                 f"🎉 <b>Great job!</b>\n\nPlease now join the next channel [{step}/{total}]:\n👉 <b>{esc(display_name)}</b>\n\nTap to join then tap “✅ I've joined”.")
+                 f"🎉 <b>أحسنت!</b>\n\nيرجى الآن الاشتراك في القناة / المجموعة التالية [{step}/{total}]:\n👉 <b>{esc(display_name)}</b>\n\nاضغط على الزر أدناه للاشتراك ثم اضغط «✅ تحقّقت».",
+                 f"🎉 <b>Great job!</b>\n\nPlease now join the next channel/group [{step}/{total}]:\n👉 <b>{esc(display_name)}</b>\n\nTap to join then tap “✅ I've joined”.")
     else:
         text = T(lang,
-                 f"🔒 <b>الاشتراك الإجباري مطلوب</b>\n\nللاستمرار في استخدام البوت، اشترك في القناة [{step}/{total}]:\n👉 <b>{esc(display_name)}</b>\n\nبعد الاشتراك اضغط «✅ تحقّقت» للمتابعة.",
-                 f"🔒 <b>Subscription required</b>\n\nTo continue using the bot, join channel [{step}/{total}]:\n👉 <b>{esc(display_name)}</b>\n\nAfter joining, tap “✅ I've joined” to proceed.")
+                 f"🔒 <b>الاشتراك الإجباري مطلوب</b>\n\nللاستمرار في استخدام البوت، يجب عليك الاشتراك أولاً في القناة / المجموعة [{step}/{total}]:\n👉 <b>{esc(display_name)}</b>\n\nبعد الاشتراك اضغط «✅ تحقّقت» للمتابعة.",
+                 f"🔒 <b>Subscription required</b>\n\nTo continue using the bot, you must join channel/group [{step}/{total}]:\n👉 <b>{esc(display_name)}</b>\n\nAfter joining, tap “✅ I've joined” to proceed.")
 
     kb = [
         [{"text": T(lang, f"📢 اشترك في {display_name}", f"📢 Join {display_name}"), "url": link}],
         [{"text": T(lang, "✅ تحقّقت", "✅ I've joined"), "callback_data": "check:sub"}]
     ]
     if edit:
-        await edit(text, kb)
-    else:
-        await tg.send_message(chat_id, text, kb)
+        try:
+            await edit(text, kb)
+            return
+        except Exception:
+            pass
+    await tg.send_message(chat_id, text, kb)
 
 
 # ---------- feature guide ----------
@@ -696,7 +763,9 @@ async def _handle_message(msg):
         raw = text.strip()
         if "t.me/" in raw:
             raw = raw.split("t.me/")[-1].split("/")[0].split("?")[0]
-        if not raw.startswith("@") and not raw.startswith("-100") and not raw.isdigit():
+        if raw.isdigit():
+            ch = "-100" + raw
+        elif not raw.startswith("@") and not raw.startswith("-100"):
             ch = "@" + raw
         else:
             ch = raw
@@ -706,9 +775,41 @@ async def _handle_message(msg):
             channels.append(ch)
             await set_config("forced_channels", channels)
             await set_config("forced_channel", channels[0])
+            
+            # Check bot admin status in this channel
+            c_test = await tg.get_chat(ch)
+            title_str = ""
+            admin_feedback = ""
+            if c_test.get("ok"):
+                title = c_test["result"].get("title")
+                if title:
+                    title_str = f" (<b>{esc(title)}</b>)"
+                me = await tg.get_me()
+                bot_id = me.get("result", {}).get("id")
+                if bot_id:
+                    m_check = await tg.get_chat_member(ch, bot_id)
+                    if m_check.get("ok"):
+                        b_status = m_check["result"].get("status")
+                        if b_status not in ("administrator", "creator"):
+                            admin_feedback = T(lang,
+                                "\n\n⚠️ <b>تنبيه هام جداً:</b> البوت ليس مشرفاً (Admin) في هذه القناة حالياً! يرجى رفعه مشرفاً حتى يتمكن من فحص اشتراك المستخدمين بدقة.",
+                                "\n\n⚠️ <b>Important Notice:</b> The bot is not an Admin in this channel yet! Please promote it to Admin.")
+                        else:
+                            admin_feedback = T(lang,
+                                "\n\n👑 <b>تم التحقق بنجاح:</b> البوت مشرف (Admin) في القناة وجاهز لفحص اشتراك الأعضاء فوراً.",
+                                "\n\n👑 <b>Verified:</b> The bot is an Admin in this channel and ready to verify members.")
+                    else:
+                        admin_feedback = T(lang,
+                            "\n\n⚠️ <b>تنبيه:</b> يرجى التأكد من رفع البوت مشرفاً (Admin) في القناة/المجموعة.",
+                            "\n\n⚠️ <b>Notice:</b> Please ensure the bot is an Admin in this channel/group.")
+            else:
+                admin_feedback = T(lang,
+                    "\n\n⚠️ <b>تنبيه:</b> تأكد من كتابة اليوزر بشكل صحيح ورفع البوت مشرفاً (Admin) في القناة.",
+                    "\n\n⚠️ <b>Notice:</b> Ensure the username is correct and the bot is an Admin.")
+
             msg_ok = T(lang,
-                f"✅ تم إضافة القناة/المجموعة بنجاح:\n<b>{esc(ch)}</b>\n\nإجمالي القنوات المطلوبة الآن: <b>{len(channels)}</b>\n⚠️ تأكد من رفع البوت كمشرف (Admin) فيها حتى يتمكن من التحقق من اشتراك الأعضاء.",
-                f"✅ Channel/group added successfully:\n<b>{esc(ch)}</b>\n\nTotal forced channels: <b>{len(channels)}</b>\n⚠️ Make sure the bot is an Admin in it.")
+                f"✅ تم إضافة القناة/المجموعة بنجاح:\n<b>{esc(ch)}</b>{title_str}\n\nإجمالي القنوات المطلوبة الآن: <b>{len(channels)}</b>{admin_feedback}",
+                f"✅ Channel/group added successfully:\n<b>{esc(ch)}</b>{title_str}\n\nTotal forced channels: <b>{len(channels)}</b>{admin_feedback}")
         else:
             msg_ok = T(lang, f"ℹ️ القناة موجودة مسبقاً في القائمة:\n<b>{esc(ch)}</b>", f"ℹ️ Channel already exists in the list:\n<b>{esc(ch)}</b>")
 
@@ -736,15 +837,14 @@ async def _handle_message(msg):
         return
 
     # ---- forced subscription gate (non-admin) ----
-    if not text.startswith("/start") and not await is_member(chat_id):
-        await send_join(chat_id, lang)
-        return
+    if chat_id != ADMIN_ID and not user.get("is_admin"):
+        if not await is_member(chat_id):
+            await set_state(chat_id, None)
+            await send_join(chat_id, lang)
+            return
 
     if text.startswith("/start") or text.startswith("/menu"):
         await set_state(chat_id, None)
-        if not await is_member(chat_id):
-            await send_join(chat_id, lang)
-            return
         await tg.send_message(chat_id, main_text(lang, user), kb_main(lang, user))
         return
     if text.startswith("/support") or text.strip().lower() in ("دعم", "الدعم", "الدعم الفني", "support", "/support"):
@@ -832,11 +932,14 @@ async def _handle_callback(cq):
                 pass
         return
 
-    await tg.answer_callback(cq["id"])
+    if not data.startswith("adm:") and not user.get("is_admin") and chat_id != ADMIN_ID:
+        if not await is_member(chat_id):
+            await set_state(chat_id, None)
+            await tg.answer_callback(cq["id"], T(lang, "⚠️ يجب عليك الاشتراك في القناة أولاً لتتمكن من استخدام البوت!", "⚠️ You must join the channel first to use the bot!"), show_alert=True)
+            await send_join(chat_id, lang, edit=edit)
+            return
 
-    if not data.startswith("adm:") and not user.get("is_admin") and not await is_member(chat_id):
-        await send_join(chat_id, lang)
-        return
+    await tg.answer_callback(cq["id"])
 
     if data == "menu:main":
         await set_state(chat_id, None)

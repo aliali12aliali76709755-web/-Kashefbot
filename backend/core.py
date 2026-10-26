@@ -12,7 +12,7 @@ load_dotenv(ROOT_DIR / ".env")
 
 MONGO_URL = os.environ.get("MONGO_URL", "")
 DB_NAME = os.environ.get("DB_NAME", "osint_bot")
-if MONGO_URL and ("mongodb+srv://" in MONGO_URL or not os.environ.get("RENDER")):
+if MONGO_URL and "mongodb+srv://" in MONGO_URL:
     try:
         client = AsyncIOMotorClient(MONGO_URL, serverSelectionTimeoutMS=2000)
         db = client[DB_NAME]
@@ -152,13 +152,47 @@ class TelegramClient:
 tg = TelegramClient(TELEGRAM_TOKEN)
 
 
+import json
+
+CONFIG_FILE = ROOT_DIR / "bot_config.json"
+
+
+def _load_disk_config() -> dict:
+    if CONFIG_FILE.exists():
+        try:
+            return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def _save_disk_config(data: dict):
+    try:
+        CONFIG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
 async def get_config():
-    doc = await db.settings.find_one({"_id": "config"})
-    return doc or {}
+    disk = _load_disk_config()
+    try:
+        doc = await db.settings.find_one({"_id": "config"})
+        if doc:
+            merged = {**disk, **doc}
+            return merged
+    except Exception:
+        pass
+    return disk
 
 
 async def set_config(key, value):
-    await db.settings.update_one({"_id": "config"}, {"$set": {key: value}}, upsert=True)
+    try:
+        await db.settings.update_one({"_id": "config"}, {"$set": {key: value}}, upsert=True)
+    except Exception:
+        pass
+    disk = _load_disk_config()
+    disk[key] = value
+    _save_disk_config(disk)
 
 
 async def get_or_create_user(tg_user: dict, referred_by=None):
